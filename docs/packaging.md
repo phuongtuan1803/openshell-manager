@@ -43,6 +43,15 @@ revision. Unknown provenance and mismatches fail before checkout/native commands
 or state creation. Install only immutable reviewed commits even though a VCS
 installer can also accept branch names.
 
+PEP 610 `requested_revision` records the install request and may be missing, a
+branch, a tag, or a SHA. It is not used as revision proof. The accepted contract is
+that the approved source's resolved, full `commit_id` must exactly match the
+project's reviewed `manager_revision`, regardless of `requested_revision`. A
+mutable-ref installation resolving to that exact commit can pass; a moved ref
+resolving elsewhere fails. An expected SHA in `requested_revision` cannot rescue a
+missing, non-SHA or mismatching `commit_id`. The installation procedure above
+continues to require an explicitly reviewed full SHA for reproducibility.
+
 Plain wheels/sdists and local directory installations lack approved VCS provenance.
 They can display `version` and help, but operational commands refuse them. Reinstall
 from the approved full Git SHA to fix missing provenance or a mismatch. Do not

@@ -27,6 +27,31 @@ def test_installed_exact_pin(monkeypatch, tmp_path):
     assert provenance.verify(PIN) == PIN
 
 
+@pytest.mark.parametrize('requested,commit,accepted', [
+    (None, PIN, True),
+    ('main', PIN, True),
+    ('v0.1.0', PIN, True),
+    ('b' * 40, PIN, True),
+    (PIN, PIN, True),
+    (PIN, None, False),
+    (PIN, 'main', False),
+    (PIN, 'b' * 40, False),
+])
+def test_requested_revision_never_overrides_resolved_commit(monkeypatch, tmp_path, requested, commit, accepted):
+    vcs = {'vcs': 'git'}
+    if requested is not None:
+        vcs['requested_revision'] = requested
+    if commit is not None:
+        vcs['commit_id'] = commit
+    installed(monkeypatch, tmp_path, {'url': URL, 'vcs_info': vcs})
+    monkeypatch.setattr(provenance, 'git', lambda *a: pytest.fail('No mutable-ref lookup allowed'))
+    if accepted:
+        assert provenance.verify(PIN) == PIN
+    else:
+        with pytest.raises(ValueError, match='full Manager Git commit identity|revision mismatch'):
+            provenance.verify(PIN)
+
+
 @pytest.mark.parametrize('receipt', [{}, {'url': URL}, {'url': 'file:///tmp/unknown'},
     {'url': URL, 'vcs_info': {'vcs': 'git', 'commit_id': 'main'}},
     {'url': URL + '/evil', 'vcs_info': {'vcs': 'git', 'commit_id': PIN}},
