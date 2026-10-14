@@ -30,15 +30,16 @@ import workflow
 import agents
 
 HERE = Path(__file__).resolve().parent
+PROJECT_ROOT = HERE.parent.parent
 REPO = None  # Assigned only from a validated project profile.
 STATE = Path.home() / ".local/state/openshell-manager/unconfigured"
-CONFIG = HERE / "phase2.json"
+CONFIG = PROJECT_ROOT / "config/defaults/phase2.json"
 NAME = "example-dev-phase2"  # Never accept arbitrary resource names from guest data/environment.
 PROFILE = None
 WORKSPACE = "/sandbox/project/checkout"
-SOURCE_MANIFEST = HERE / "source-manifest.txt"
-EDIT_SCOPE = HERE / "edit-scope.txt"
-PROVIDER_PROFILE = HERE / "policies/github.yaml"
+SOURCE_MANIFEST = PROJECT_ROOT / "tests/fixtures/legacy/source-manifest.txt"
+EDIT_SCOPE = PROJECT_ROOT / "tests/fixtures/legacy/edit-scope.txt"
+PROVIDER_PROFILE = PROJECT_ROOT / "config/policies/github.yaml"
 MAX_TRANSFER = 8 * 1024 * 1024
 
 
@@ -359,7 +360,7 @@ def image(check=False):
     )
     if result.returncode:
         require(PROFILE is None, "Reviewed project image digest missing; provision explicitly before setup")
-        recipe = digest((HERE / "Dockerfile").read_bytes())
+        recipe = digest((PROJECT_ROOT / "docker/Dockerfile").read_bytes())
         built = command(["docker", "image", "inspect", cfg["image"]], check=False)
         info = json.loads(built.stdout)[0] if built.returncode == 0 else None
         if info:
@@ -371,7 +372,7 @@ def image(check=False):
         # Build in an empty context: never send repository/secrets to Docker.
         if not info:
             with tempfile.TemporaryDirectory(prefix="manager-build-") as temp:
-                shutil.copyfile(HERE / "Dockerfile", Path(temp) / "Dockerfile")
+                shutil.copyfile(PROJECT_ROOT / "docker/Dockerfile", Path(temp) / "Dockerfile")
                 command(
                     [
                         "docker",
@@ -537,7 +538,7 @@ def login_status(data):
     print(
         "PASS: Codex authenticated"
         if result.returncode == 0
-        else "LOGIN REQUIRED: ./infra/dev-sandbox/start.sh login"
+        else "LOGIN REQUIRED: ./scripts/start.sh login"
     )
     return result.returncode == 0
 
@@ -718,7 +719,7 @@ def setup(mode):
     if mode == "apply":
         data["config_hash"] = config_hash()
         save(STATE / "state.json", data)
-    print("PASS: setup checks complete. Start: ./infra/dev-sandbox/start.sh codex")
+    print("PASS: setup checks complete. Start: ./scripts/start.sh codex")
 
 
 def setup_report(mode):
@@ -734,7 +735,7 @@ def setup_report(mode):
             setup(mode)
         require(
             "LOGIN REQUIRED:" not in output.getvalue(),
-            "Codex login required. Run ./infra/dev-sandbox/start.sh login; retry setup.sh --check.",
+            "Codex login required. Run ./scripts/start.sh login; retry setup.sh --check.",
         )
     finally:
         for line in output.getvalue().splitlines():
@@ -900,8 +901,8 @@ def pending(data):
                 "Risk: full HTTPS access for this executable can send source and credentials "
                 "to this host. HTTP method/path were unavailable; this is an endpoint grant."
             )
-            print(f"Approve: ./infra/dev-sandbox/rules.sh approve {key}")
-            print(f"Reject: ./infra/dev-sandbox/rules.sh reject {key}")
+            print(f"Approve: ./scripts/rules.sh approve {key}")
+            print(f"Reject: ./scripts/rules.sh reject {key}")
     print(
         "Compatibility inbox: recent structured TCP denials only; not a native proposal API. "
         "DNS-only/older denials may have no executable and cannot be approved here."
@@ -1025,7 +1026,7 @@ def update(data, rule, confirmation=True):
     (STATE / "pending-change.json").unlink()
     print(f"PASS: revision {before['version']} -> {after['version']} Loaded")
     if rule["id"].startswith("review_"):
-        print(f"Undo: ./infra/dev-sandbox/rules.sh rollback {rule['id']}")
+        print(f"Undo: ./scripts/rules.sh rollback {rule['id']}")
 
 
 def rules(action, identifier):

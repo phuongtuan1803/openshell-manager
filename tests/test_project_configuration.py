@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-HERE = Path(__file__).resolve().parents[2] / 'infra/dev-sandbox'
+HERE = Path(__file__).resolve().parents[1] / 'src/openshell_manager'
 sys.path.insert(0, str(HERE))
 import configuration
 import workflow

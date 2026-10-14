@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-HERE = Path(__file__).resolve().parents[2] / "infra/dev-sandbox"
+HERE = Path(__file__).resolve().parents[1] / "src/openshell_manager"
 sys.path.insert(0, str(HERE))
 workflow = importlib.import_module("workflow")
 agents = importlib.import_module("agents")
@@ -315,12 +315,12 @@ def test_founder_acceptance_removes_branch_protection_prerequisite(monkeypatch):
 
 def test_separate_templates_never_approve_other_agents():
     for name in ["claude", "opencode"]:
-        template = json.loads((HERE / "policies" / f"{name}.json").read_text())
+        template = json.loads((HERE.parents[1] / "config/policies" / f"{name}.json").read_text())
         assert template["default_deny"] and template["manual_approval"]
         assert template["binaries"] == ["/usr/local/bin/" + name]
         assert "OFFLINE" in template["status"]
         assert "chatgpt.com" not in json.dumps(template)
-    profile = (HERE / "policies/github.yaml").read_text()
+    profile = (HERE.parents[1] / "config/policies/github.yaml").read_text()
     assert "git-receive-pack" in profile and "method: PATCH" in profile
     assert "method: PUT" not in profile
     assert "graphql" not in profile

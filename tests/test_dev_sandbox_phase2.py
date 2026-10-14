@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-HERE = Path(__file__).resolve().parents[2] / "infra/dev-sandbox"
+HERE = Path(__file__).resolve().parents[1] / "src/openshell_manager"
 sys.path.insert(0, str(HERE))
 spec = importlib.util.spec_from_file_location("phase2_control", HERE / "control.py")
 control = importlib.util.module_from_spec(spec)
