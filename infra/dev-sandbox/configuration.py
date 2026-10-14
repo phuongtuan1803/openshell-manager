@@ -1,6 +1,7 @@
 """Strict JSON profiles. Host settings never merge into project permissions."""
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import snapshot
@@ -48,6 +49,7 @@ def load(project_path, host_path=None):
     require(required <= p.keys() and not p.keys() - required - {'rules', 'modules'}, 'Unknown or missing project fields')
     require(isinstance(p['id'], str) and re.fullmatch(r'[a-z][a-z0-9-]{1,30}', p['id']), 'Invalid project ID')
     require(p['sandbox'] == p['id'] + '-dev', 'Sandbox must be <project-id>-dev; conflicting identity')
+    require(len(p['sandbox']) <= 19, 'OpenShell sandbox names must be at most 19 characters')
     require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9_.-]*', p['repository'])
             and p['repository'].lower() not in {'example/project', 'owner/repository', 'your-org/your-repo'}, 'Placeholder or invalid repository')
     require(re.fullmatch(r'sha256:[0-9a-f]{64}', p['image_id']) and set(p['image_id'][7:]) != {'0'}, 'Placeholder or invalid image digest')
@@ -99,7 +101,33 @@ def load(project_path, host_path=None):
     require(state_root.is_absolute() and state_root != Path('/') and state_root.resolve() == state_root, 'Unsafe state root')
     require(not state_root.is_relative_to(root), 'Host state must be outside project checkout')
     result['state'] = state_root / p['id']
+    verify_checkout(result)
     return result
+
+
+def verify_checkout(cfg):
+    """Check raw and effective Git URLs without transport, credentials or remote edits."""
+    root = Path(cfg['root'])
+    require(root.resolve() == root and (root / '.git').is_dir()
+            and not (root / '.git').is_symlink(), 'Unsafe project checkout identity')
+    repo = cfg['repository']
+    allowed = {f'https://github.com/{repo}', f'https://github.com/{repo}.git',
+               f'git@github.com:{repo}', f'git@github.com:{repo}.git',
+               f'ssh://git@github.com/{repo}', f'ssh://git@github.com/{repo}.git'}
+
+    def read(*args):
+        result = subprocess.run(['git', '-C', str(root), *args], capture_output=True,
+                                text=True, check=False, timeout=10)
+        require(result.returncode == 0, 'Cannot verify project Git origin; work preserved')
+        return result.stdout.strip().splitlines()
+
+    require(read('rev-parse', '--show-toplevel') == [str(root)], 'Project Git root mismatch')
+    for args in (('config', '--get-all', 'remote.origin.url'),
+                 ('remote', 'get-url', '--all', 'origin'),
+                 ('remote', 'get-url', '--push', '--all', 'origin')):
+        urls = read(*args)
+        require(len(urls) == 1 and urls[0] in allowed,
+                'Project Git origin does not match configured repository; work preserved')
 
 
 def provider_profile(cfg):

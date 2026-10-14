@@ -195,3 +195,41 @@ def test_active_host_task_blocks_sync_through_completion(monkeypatch, tmp_path):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         assert control.sync_checkout()["state"] == "active-agent"
     assert not control.task_active()
+
+
+@pytest.mark.parametrize('install', [False, True])
+def test_missing_yaml_bootstrap_is_explicit_and_pinned_dependency_only(monkeypatch, install):
+    calls, imports = [], []
+    ready = object()
+    def import_yaml(name):
+        assert name == 'yaml'
+        imports.append(name)
+        if len(imports) == 1:
+            raise ModuleNotFoundError("No module named 'yaml'", name='yaml')
+        return ready
+    monkeypatch.setattr(bootstrap.importlib, 'import_module', import_yaml)
+    monkeypatch.setattr(bootstrap.platform, 'system', lambda: 'Linux')
+    monkeypatch.setattr(bootstrap.platform, 'machine', lambda: 'x86_64')
+    monkeypatch.setattr(Path, 'exists', lambda p: str(p) == '/etc/debian_version')
+    if install:
+        assert bootstrap.yaml_module(lambda argv, **kwargs: calls.append(argv), install=True) is ready
+        assert calls == [['sudo', 'apt-get', 'update'], ['sudo', 'apt-get', 'install', '-y', 'python3-yaml']]
+    else:
+        with pytest.raises(ValueError, match='PyYAML missing'):
+            bootstrap.yaml_module(lambda argv, **kwargs: calls.append(argv))
+        assert not calls
+
+
+def test_existing_yaml_requires_no_install(monkeypatch):
+    ready = object()
+    monkeypatch.setattr(bootstrap.importlib, 'import_module', lambda name: ready)
+    assert bootstrap.yaml_module(lambda *a, **k: pytest.fail('Existing YAML must be reused'), install=True) is ready
+
+
+def test_unsupported_yaml_bootstrap_host_is_not_changed(monkeypatch):
+    def missing(name):
+        raise ModuleNotFoundError(name='yaml')
+    monkeypatch.setattr(bootstrap.importlib, 'import_module', missing)
+    monkeypatch.setattr(bootstrap.platform, 'system', lambda: 'Darwin')
+    with pytest.raises(ValueError, match='unsupported'):
+        bootstrap.yaml_module(lambda *a, **k: pytest.fail('Unsupported host changed'), install=True)

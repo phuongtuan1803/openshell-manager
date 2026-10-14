@@ -16,10 +16,18 @@ configuration directory. Replace the repository, checkout root, image tag,
 image digest and immutable Manager Git revision. Examples intentionally fail
 validation until filled in. Scope file paths resolve relative to the profile;
 source paths resolve relative to the project checkout. The root must be a
-standalone Git checkout; linked worktrees and symlinks are rejected.
+standalone Git checkout; linked worktrees and symlinks are rejected. Its origin
+must identify the configured GitHub repository using exact HTTPS, SSH URL or
+Git SCP syntax, with optional `.git`. Validation reads the raw origin and Git’s
+effective fetch/push URLs, so missing/multiple origins, foreign push targets,
+URL rewrites to another repository, HTTP and userinfo URLs fail closed. These
+checks never contact GitHub or alter remotes. Identity is rechecked immediately
+before snapshot creation, patch export, autonomous execution and publication.
 
 Project IDs use lowercase letters, numbers and hyphens, start with a letter,
-and contain 2–31 characters. Sandbox names are `<id>-dev`, provider names are
+and contain 2–15 characters when combined with the required `-dev` suffix.
+Sandbox names are limited to OpenShell’s 19 characters; 20 or more fail before
+host changes. Sandbox names are `<id>-dev`, provider names are
 `<id>-github`, and checkout paths are `/sandbox/<id>/checkout`. These conservative
 names avoid ambiguous native identifiers and cannot target imported OMA resources.
 Provider endpoints are generated from the existing exact repository template;
@@ -34,8 +42,11 @@ secrets, ignored paths, symlinks and noncommitted blobs. `pilot` and `full` now
 select the configured manifest. `module` selects named lists in `modules`, each
 strictly contained in that manifest. No directory discovery expands permissions.
 Tests use the pinned Python pytest runner and configured `test_paths`; explicit
-`--test-path` values can only select those paths. Module runs should select test
-paths included in that module's source list. The base branch is project-owned;
+`--test-path` values must be both configured and within the active source scope.
+Module runs automatically intersect configured test paths with the selected
+module file lists; multiple modules use their union. If no configured tests are
+in scope, execution fails before native checks, snapshot upload or model calls.
+The same scope checks apply to the workflow API and publication test runner. The base branch is project-owned;
 a CLI override must match it. Publish heads still require `feat/openshell-*`.
 No automatic main push, force-push or PR merge is added.
 
@@ -73,9 +84,16 @@ export MANAGER_HOST=/absolute/path/to/private/host.json  # optional
 
 Alternatively pass `--project FILE --host FILE` to wrappers or `control.py`.
 `github.sh` now forwards options after its action; `verify.sh` accepts profile
-options. Setup requires Python 3.11+ and PyYAML already installed rather than
-installing prerequisites before validating a profile. Explicit operational setup
-retains the original pinned bootstrap behavior after validation. Profiled setup
+options. Setup requires Python 3.11+ and Git to validate the JSON profile and
+checkout identity. On supported Linux Lite/Ubuntu x86_64 hosts, one-command
+`setup.sh --project FILE` can then install the existing `python3-yaml` dependency
+if missing. It validates the profile, base override, checkout origin, Manager pin
+and state binding, and takes operation/task leases before dependency installation.
+Invalid profiles and active sessions cannot reach the installer. Existing PyYAML
+is reused. Check/dry-run/offline-agent modes never install dependencies; missing
+PyYAML produces an actionable setup instruction. Hosts without usable Python/Git
+or with an unsupported interpreter/bootstrap platform need explicit prerequisites.
+Explicit operational setup retains the pinned host bootstrap after validation. Profiled setup
 requires the reviewed image digest to exist locally; it refuses automatic builds
 that would substitute a different digest. The standalone probe launcher now
 requires an explicit `--sandbox` instead of an OMA resource default. These commands
@@ -157,3 +175,43 @@ Publication follow-up: after the user authorized pushing these changes,
 does not contain PR1 commit `3649226`. PR2 is therefore published on a separate
 `feat/pr2-generalize-configuration` branch stacked on the PR1 baseline. PR1 must
 merge before PR2 can merge; main is not modified and no PR is created here.
+
+
+## PR2 review corrections
+
+Before editing, the clean current branch was `review/pr1-import-inventory` at
+`53d5448`, directly following PR1 `3649226`. Fixes were applied in place; the
+combined branch was not rebased or recreated, and no existing commits were
+reapplied. This review adds native sandbox-name boundaries, read-only checkout
+origin checks at load/operation boundaries, automatic module test selection and
+validated one-command PyYAML provisioning. It does not change version pins,
+security policies, existing state bindings or credential handling.
+
+Regression coverage includes 18/19/20-character sandbox boundaries; supported
+Git URL forms, absent/foreign/multiple origins, foreign push URLs and `insteadOf`
+rewrites; origin drift before snapshot/export/publish; module/multi-module test
+selection, explicit out-of-scope tests and early no-tests failure; supported and
+unsupported dependency provisioning, existing PyYAML reuse, invalid base/profile
+rejection, and active-session exclusion. All installation and native calls remain
+offline doubles.
+
+| Review verification | Result |
+| --- | --- |
+| Focused project/agent/bootstrap regressions | 109 passed, 16 skipped |
+| One final full offline suite | **255 passed, 16 skipped in 5.49s** |
+| Python AST, JSON/YAML/TOML parsing, Bash syntax | Passed |
+| `git diff --check` | Passed |
+
+Changed files are `configuration.py`, `control.py`, `workflow.py`, `bootstrap.py`,
+`setup.sh`, `test_project_configuration.py`, `test_dev_sandbox_bootstrap.py`,
+README and these migration notes. Earlier successful paid/live evidence was not
+rerun or claimed as new validation. The skipped cases remain the existing
+Claude/OpenCode live acceptance cases. No host tools or installers were run
+outside mocks; OMA, Gateway/VM resources, credentials and pins remain untouched.
+
+No implementation/test blocker remains. Python 3.11+ and Git must be available
+before profile validation; non-system interpreters may not see the distro
+`python3-yaml` package and then require explicit dependency installation. Native
+host acceptance and OMA cutover remain PR4, and Telegram remains PR3. Review and verification took place on the existing combined branch without
+rebasing, recreating the branch, creating a PR or merging. The user subsequently
+authorized committing these verified corrections to the PR1 branch.

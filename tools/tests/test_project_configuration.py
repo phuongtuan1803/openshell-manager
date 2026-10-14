@@ -27,6 +27,7 @@ def profile(tmp_path):
         root = tmp_path / name
         root.mkdir()
         subprocess.run(['git', 'init', '-q', str(root)], check=True)
+        subprocess.run(['git', '-C', str(root), 'remote', 'add', 'origin', 'https://github.com/synthetic/' + name + '.git'], check=True)
         source = ['modules/m01-synthetic/src/app.py', 'modules/m01-synthetic/tests/test_app.py'] if oma else ['src/app.py', 'tests/test_app.py']
         for path in source:
             target = root / path
@@ -128,6 +129,7 @@ def test_state_credentials_and_lock_isolation(profile, monkeypatch):
     assert not (c.STATE / 'operation.lock').exists()
     assert 'synthetic/alpha' not in c.PROVIDER_PROFILE.read_text()
     acfg['repository'] = 'synthetic/changed'
+    subprocess.run(['git', '-C', acfg['root'], 'remote', 'set-url', 'origin', 'https://github.com/synthetic/changed.git'], check=True)
     a.write_text(json.dumps(acfg))
     with pytest.raises(ValueError, match='Conflicting project'):
         c.configure(a, host)
@@ -258,3 +260,174 @@ def test_project_export_and_patch_boundaries(profile, tmp_path, oma):
     changed[source[1]] = base64.b64encode(b'print(2)\n').decode()
     with pytest.raises(ValueError, match='outside approved'):
         c.patch_from_files(baseline, changed, editable)
+
+
+@pytest.mark.parametrize('length,valid', [(2, True), (14, True), (15, True), (16, False), (31, False)])
+def test_sandbox_native_length_boundary(profile, length, valid, monkeypatch):
+    path, host, _ = profile('a' * length)
+    if valid:
+        cfg = configuration.load(path, host)
+        assert len(cfg['sandbox']) == length + 4 <= 19
+    else:
+        c = controller()
+        monkeypatch.setattr(c, 'command', lambda *a, **k: pytest.fail('Overlong sandbox reached host'))
+        with pytest.raises(ValueError, match='at most 19'):
+            c.configure(path, host, install_dependencies=True)
+        assert not (host.parent / 'state').exists()
+
+
+@pytest.mark.parametrize('url', [
+    'https://github.com/synthetic/generic.git', 'https://github.com/synthetic/generic',
+    'git@github.com:synthetic/generic.git', 'git@github.com:synthetic/generic',
+    'ssh://git@github.com/synthetic/generic.git', 'ssh://git@github.com/synthetic/generic',
+])
+def test_checkout_origin_supported_formats(profile, url):
+    path, host, cfg = profile()
+    subprocess.run(['git', '-C', cfg['root'], 'remote', 'set-url', 'origin', url], check=True)
+    before = (Path(cfg['root']) / '.git/config').read_bytes()
+    configuration.load(path, host)
+    assert (Path(cfg['root']) / '.git/config').read_bytes() == before
+
+
+@pytest.mark.parametrize('case', ['missing', 'wrong', 'multiple', 'push', 'rewrite', 'http', 'userinfo'])
+def test_checkout_identity_rejects_ambiguous_and_foreign_origins(profile, case, monkeypatch):
+    path, host, cfg = profile()
+    git = ['git', '-C', cfg['root']]
+    commands = {
+        'missing': ['remote', 'remove', 'origin'],
+        'wrong': ['remote', 'set-url', 'origin', 'https://github.com/foreign/project.git'],
+        'multiple': ['config', '--add', 'remote.origin.url', 'https://github.com/foreign/project.git'],
+        'push': ['config', 'remote.origin.pushurl', 'https://github.com/foreign/project.git'],
+        'rewrite': ['config', 'url.https://github.com/foreign/.insteadOf', 'https://github.com/synthetic/'],
+        'http': ['remote', 'set-url', 'origin', 'http://github.com/synthetic/generic.git'],
+        'userinfo': ['remote', 'set-url', 'origin', 'https://user@github.com/synthetic/generic.git'],
+    }
+    subprocess.run(git + commands[case], check=True)
+    before = (Path(cfg['root']) / '.git/config').read_bytes()
+    c = controller()
+    monkeypatch.setattr(c, 'command', lambda *a, **k: pytest.fail('Invalid origin reached host'))
+    monkeypatch.setattr(c.bootstrap, 'yaml_module', lambda *a, **k: pytest.fail('Invalid origin reached dependency install'))
+    with pytest.raises(ValueError, match='Git origin'):
+        c.configure(path, host, install_dependencies=True)
+    assert not (host.parent / 'state').exists()
+    assert (Path(cfg['root']) / '.git/config').read_bytes() == before
+
+
+@pytest.mark.parametrize('operation', ['snapshot', 'export', 'publish'])
+def test_origin_drift_rechecked_at_operation_boundary(profile, operation, monkeypatch):
+    path, host, _ = profile()
+    cfg = configuration.load(path, host)
+    c = controller()
+    c.PROFILE, c.REPO, c.STATE = cfg, Path(cfg['root']), cfg['state']
+    subprocess.run(['git', '-C', cfg['root'], 'remote', 'set-url', 'origin', 'https://github.com/foreign/project.git'], check=True)
+    monkeypatch.setattr(c, 'guest', lambda *a, **k: pytest.fail('Origin drift reached guest'))
+    monkeypatch.setattr(c, 'current', lambda *a: pytest.fail('Origin drift read snapshot'))
+    monkeypatch.setattr(c.snapshot, 'export', lambda *a, **k: pytest.fail('Origin drift exported source'))
+    monkeypatch.setattr(workflow, 'publication_preflight', lambda *a: pytest.fail('Origin drift reached provider'))
+    with pytest.raises(ValueError, match='Git origin'):
+        if operation == 'snapshot':
+            c.refresh({}, names=['src/app.py'])
+        elif operation == 'export':
+            c.export_patch({})
+        else:
+            workflow.publish(c, {}, 'feat/openshell-review', Path('unused'), base='develop')
+    assert not c.STATE.exists()
+
+
+def test_module_test_selection_intersects_source_scope():
+    c = SimpleNamespace(PROFILE={
+        'test_paths': ['core/test_app.py', 'other/test_app.py', 'shared/test_all.py'],
+        'modules': {'core': ['core/app.py', 'core/test_app.py'], 'other': ['other/test_app.py']},
+    })
+    paths = workflow.scope_paths(c, 'module', ['core'])
+    command = workflow.test_command(c, paths, scope='module')
+    assert command == ('/usr/bin/python3', '-m', 'pytest', '-q', 'core/test_app.py')
+    with pytest.raises(ValueError, match='active scope'):
+        workflow.test_command(c, paths, ['other/test_app.py'], 'module')
+    multiple = workflow.scope_paths(c, 'module', ['core', 'other'])
+    assert workflow.test_command(c, multiple, scope='module')[4:] == ('core/test_app.py', 'other/test_app.py')
+
+
+@pytest.mark.parametrize('tests', [None, ('/usr/bin/python3', '-m', 'pytest', '-q', 'other/test_app.py')])
+def test_module_with_no_valid_tests_fails_before_native_or_refresh(tests):
+    c = SimpleNamespace(PROFILE={
+        'test_paths': ['other/test_app.py'], 'modules': {'core': ['core/app.py']},
+    }, state=lambda: pytest.fail('No module tests reached native state'),
+       refresh=lambda *a, **k: pytest.fail('No module tests refreshed source'))
+    with pytest.raises(ValueError, match='active scope'):
+        workflow._run(c, 'codex', 'fix task', scope='module', modules=['core'], tests=tests)
+
+
+def test_profiled_workflow_defaults_choose_module_tests_before_native():
+    class StopBeforeNative(Exception):
+        pass
+    c = SimpleNamespace(PROFILE={
+        'test_paths': ['core/test_app.py', 'other/test_app.py'],
+        'modules': {'core': ['core/app.py', 'core/test_app.py']},
+    }, state=lambda: pytest.fail('Test selection must happen first'))
+    original = workflow.scoped_tests
+    selected = []
+    def check_tests(control, paths, tests, scope):
+        selected.append(original(control, paths, tests, scope))
+        raise StopBeforeNative
+    from unittest.mock import patch
+    with patch.object(workflow, 'scoped_tests', check_tests), pytest.raises(StopBeforeNative):
+        workflow._run(c, 'codex', 'fix task', scope='module', modules=['core'])
+    assert selected == [('/usr/bin/python3', '-m', 'pytest', '-q', 'core/test_app.py')]
+
+
+@pytest.mark.parametrize('install', [False, True])
+def test_validated_setup_can_provision_yaml_without_extra_command(profile, monkeypatch, install):
+    import yaml
+    path, host, _ = profile()
+    c = controller()
+    calls, imports = [], []
+    for module in (c.github_provider, c.workflow):
+        for key in ('PROVIDER', 'REPOSITORY'):
+            monkeypatch.setattr(module, key, getattr(module, key))
+    monkeypatch.setattr(c.github_provider, 'RULE', c.github_provider.RULE)
+    def command(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(stdout='b' * 40)
+    def import_yaml(name):
+        assert name == 'yaml'
+        imports.append(name)
+        if len(imports) == 1:
+            raise ModuleNotFoundError(name='yaml')
+        return yaml
+    monkeypatch.setattr(c, 'command', command)
+    monkeypatch.setattr(c.bootstrap.importlib, 'import_module', import_yaml)
+    monkeypatch.setattr(c.bootstrap.platform, 'system', lambda: 'Linux')
+    monkeypatch.setattr(c.bootstrap.platform, 'machine', lambda: 'x86_64')
+    if install:
+        c.configure(path, host, install_dependencies=True)
+        assert [argv for argv in calls if argv[0] == 'sudo'] == [
+            ['sudo', 'apt-get', 'update'], ['sudo', 'apt-get', 'install', '-y', 'python3-yaml']]
+        assert c.PROVIDER_PROFILE.is_file()
+    else:
+        with pytest.raises(ValueError, match='PyYAML missing'):
+            c.configure(path, host)
+        assert not any(argv[0] == 'sudo' for argv in calls)
+
+
+def test_invalid_base_override_cannot_bootstrap_dependencies(profile, monkeypatch):
+    path, host, _ = profile()
+    c = controller()
+    monkeypatch.setattr(c, 'command', lambda *a, **k: pytest.fail('Invalid base reached bootstrap'))
+    with pytest.raises(ValueError, match='Base branch differs'):
+        c.configure(path, host, install_dependencies=True, base_branch='other')
+    assert not (host.parent / 'state').exists()
+
+
+def test_active_session_cannot_bootstrap_dependencies(profile, monkeypatch):
+    import fcntl
+    path, host, _ = profile()
+    cfg = configuration.load(path, host)
+    cfg['state'].mkdir(parents=True)
+    c = controller()
+    monkeypatch.setattr(c, 'command', lambda *a, **k: SimpleNamespace(stdout='b' * 40))
+    monkeypatch.setattr(c.bootstrap, 'yaml_module', lambda *a, **k: pytest.fail('Active session reached dependency install'))
+    with (cfg['state'] / 'task.lock').open('a') as task:
+        fcntl.flock(task, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(ValueError, match='Active session'):
+            c.configure(path, host, install_dependencies=True)

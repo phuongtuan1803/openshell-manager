@@ -27,8 +27,8 @@ checks; the OMA-only `--reports` option now exits with an explanation.
 PR2 adds validated project profiles and isolated host state. Example profiles are
 inert: operational commands require `--project FILE` or `MANAGER_PROJECT`.
 See [configuration ownership, CLI migration and limitations](docs/migration/pr2-configuration.md)
-for the schema, per-project scope and safe migration procedure. Setup now requires
-Python/PyYAML prerequisites to be installed explicitly before profile validation.
+for the schema, per-project scope and safe migration procedure. Setup requires Python 3.11+ and Git for validation, then can provision the
+existing PyYAML dependency on supported hosts from the same command.
 
 Pins are unchanged: OpenShell 0.1.2, Codex 0.162.1, Claude Code 2.1.296,
 OpenCode 1.19.0 and GitHub CLI 2.101.0. Upstream release checksums and the base

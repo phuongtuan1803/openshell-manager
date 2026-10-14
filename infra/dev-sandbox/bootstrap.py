@@ -2,6 +2,7 @@
 
 import getpass
 import hashlib
+import importlib
 import os
 import platform
 import shutil
@@ -52,6 +53,26 @@ def exclusive_file(path, content):
         temporary.unlink()
 
 
+def yaml_module(run, install=False):
+    """Provision the existing dependency only after the caller validates the profile."""
+    try:
+        return importlib.import_module('yaml')
+    except ModuleNotFoundError as exc:
+        if exc.name != 'yaml':
+            raise
+    if not install:
+        raise ValueError('PyYAML missing; run setup.sh with a valid profile to install it')
+    if platform.system() != 'Linux' or platform.machine() != 'x86_64' or not Path('/etc/debian_version').exists():
+        raise ValueError('Install PyYAML explicitly on this unsupported bootstrap host')
+    run(['sudo', 'apt-get', 'update'], interactive=True, timeout=600)
+    run(['sudo', 'apt-get', 'install', '-y', 'python3-yaml'], interactive=True, timeout=1200)
+    importlib.invalidate_caches()
+    try:
+        return importlib.import_module('yaml')
+    except ModuleNotFoundError:
+        raise ValueError('PyYAML is unavailable to this Python; use the system Python or install it explicitly') from None
+
+
 def host(control):
     if platform.system() != "Linux" or platform.machine() != "x86_64":
         raise ValueError("Supported host: Linux Lite/Ubuntu x86_64 with KVM.")
@@ -62,7 +83,7 @@ def host(control):
     run = control.command
     required = {"git": "git", "curl": "curl", "docker": "docker.io"}
     packages = [package for binary, package in required.items() if not shutil.which(binary)]
-    # control imports PyYAML; setup.sh provisions it before reaching this function.
+    # configure provisions PyYAML only after profile and checkout validation.
     if packages:
         run(["sudo", "apt-get", "update"], interactive=True, timeout=600)
         run(

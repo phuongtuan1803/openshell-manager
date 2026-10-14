@@ -42,10 +42,11 @@ PROVIDER_PROFILE = HERE / "policies/github.yaml"
 MAX_TRANSFER = 8 * 1024 * 1024
 
 
-def configure(project, host=None):
+def configure(project, host=None, install_dependencies=False, base_branch=None):
     global PROFILE, REPO, STATE, CONFIG, NAME, WORKSPACE, SOURCE_MANIFEST, EDIT_SCOPE, PROVIDER_PROFILE
     import configuration
     cfg = configuration.load(project, host)
+    require(base_branch is None or base_branch == cfg["base_branch"], "Base branch differs from project profile")
     for rule in cfg['rules']:
         validate_rule({**rule, 'binaries': [rule['binary']] if 'binary' in rule else ['/usr/bin/codex']})
     revision = command(['git', '-C', str(HERE), 'rev-parse', 'HEAD']).stdout.strip()
@@ -68,7 +69,12 @@ def configure(project, host=None):
     CONFIG, NAME, WORKSPACE = Path(project).absolute(), cfg['sandbox'], cfg['workspace']
     SOURCE_MANIFEST, EDIT_SCOPE = cfg['source_manifest'], cfg['edit_scope']
     PROVIDER_PROFILE = STATE / 'github-profile.yaml'
-    import yaml
+    require(not PROVIDER_PROFILE.is_symlink(), 'Symlink provider profile')
+    if install_dependencies:
+        with setup_lock("apply"), idle_lease():
+            yaml = bootstrap.yaml_module(command, install=True)
+    else:
+        yaml = bootstrap.yaml_module(command)
     content = yaml.safe_dump(configuration.provider_profile(cfg), sort_keys=False)
     require(not PROVIDER_PROFILE.is_symlink(), 'Symlink provider profile')
     if PROVIDER_PROFILE.exists():
@@ -574,6 +580,9 @@ def current(data):
 
 
 def refresh(data, names=None):
+    if PROFILE:
+        import configuration
+        configuration.verify_checkout(PROFILE)
     # Every refresh uses a new destination; old work is preserved.
     names = manifest() if names is None else names
     token = uuid.uuid4().hex
@@ -810,6 +819,9 @@ def patch_from_files(baseline, files, scope=None):
 
 
 def export_patch(data):
+    if PROFILE:
+        import configuration
+        configuration.verify_checkout(PROFILE)
     value, provenance = current(data)
     result = guest("collect", root=value["root"], provenance=provenance)
     baseline = {
@@ -1235,9 +1247,18 @@ def main():
     args = parser.parse_args()
     try:
         require(args.project is not None, "Example configuration is inert; supply --project or MANAGER_PROJECT")
-        configure(args.project, args.host)
+        require(not any(k.startswith("OPENSHELL_") for k in os.environ),
+                "OpenShell environment overrides are not allowed")
+        install_dependencies = args.command == "setup" and args.action == "apply" and args.agent not in {"claude", "opencode"}
+        if args.command == "setup":
+            require(args.action in {"apply", "check", "dry-run"}, "Invalid setup action")
+        configure(args.project, args.host, install_dependencies=install_dependencies, base_branch=args.base_branch)
         args.base_branch = args.base_branch or PROFILE["base_branch"]
         require(args.base_branch == PROFILE["base_branch"], "Base branch differs from project profile")
+        if args.command == "run":
+            tests = workflow.test_command(sys.modules[__name__],
+                                          workflow.scope_paths(sys.modules[__name__], args.scope, args.module),
+                                          args.test_path, args.scope)
         if args.command == "setup" and args.agent in {"claude", "opencode"}:
             require(args.action in {"apply", "check", "dry-run"}, "Invalid setup action")
             workflow.prepare(
@@ -1298,14 +1319,6 @@ def main():
             elif args.command == "run":
                 require(args.prompt_file is not None, "run requires --prompt-file")
                 require(args.prompt_file.stat().st_size <= 32768, "Prompt file too large")
-                for path in args.test_path:
-                    snapshot.validate_path(path)
-                    require(re.fullmatch(r"[A-Za-z0-9_./-]+", path), "Invalid test path")
-                tests = ("/usr/bin/python3", "-m", "pytest", "-q")
-                if args.scope == "pilot":
-                    tests += ("--import-mode=prepend",)
-                require(not args.test_path or set(args.test_path) <= set(PROFILE["test_paths"]), "Test paths exceed configured paths")
-                tests += tuple(args.test_path or PROFILE["test_paths"])
                 result = workflow.run(
                     sys.modules[__name__],
                     args.action,

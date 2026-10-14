@@ -68,6 +68,38 @@ def scope_paths(control, scope="pilot", modules=()):
     return selected
 
 
+def test_command(control, paths, requested=(), scope='pilot'):
+    """Choose configured tests that were actually exported into the active scope."""
+    configured = control.PROFILE['test_paths']
+    if requested:
+        if not set(requested) <= set(configured) or not set(requested) <= set(paths):
+            raise ValueError('Test paths exceed configured active scope')
+        selected = list(dict.fromkeys(requested))
+    else:
+        selected = [p for p in configured if p in paths]
+    if not selected:
+        raise ValueError('No configured tests within active scope')
+    command = ('/usr/bin/python3', '-m', 'pytest', '-q')
+    if scope == 'pilot':
+        command += ('--import-mode=prepend',)
+    return command + tuple(selected)
+
+
+def scoped_tests(control, paths, tests=None, scope='pilot'):
+    if not getattr(control, 'PROFILE', None):
+        return tests if tests is not None else ('/usr/bin/python3', '-m', 'pytest', '-q')
+    if tests is None:
+        return test_command(control, paths, scope=scope)
+    prefix = ('/usr/bin/python3', '-m', 'pytest', '-q')
+    tests = tuple(tests)
+    if tests[:4] != prefix:
+        raise ValueError('Tests must use the pinned pytest runner')
+    requested = tests[4:]
+    if requested[:1] == ('--import-mode=prepend',):
+        requested = requested[1:]
+    return test_command(control, paths, requested, scope)
+
+
 def prepare(control, name, mode="apply", model=None, auth_mode="api"):
     agent = agents.adapter(name)
     if agent.live:
@@ -127,10 +159,18 @@ def publish(
     data,
     branch,
     patch_file,
-    tests=("/usr/bin/python3", "-m", "pytest", "-q"),
+    tests=None,
     base="main",
 ):
     """Apply a validated patch to a real repository clone; never push snapshot history."""
+    if getattr(control, "PROFILE", None):
+        import configuration
+        configuration.verify_checkout(control.PROFILE)
+    if getattr(control, 'PROFILE', None):
+        paths = data['scope_manifest'] if 'scope_manifest' in data else control.manifest()
+    else:
+        paths = []
+    tests = scoped_tests(control, paths, tests, scope='full')
     branch_name(branch)
     if getattr(control, "PROFILE", None):
         if base != control.PROFILE["base_branch"]:
@@ -265,7 +305,7 @@ def _run(
     model=None,
     attempts=1,
     branch=None,
-    tests=("/usr/bin/python3", "-m", "pytest", "-q"),
+    tests=None,
     release_lock=None,
     base="main",
 ):
@@ -275,6 +315,11 @@ def _run(
     if not prompt.strip() or len(prompt.encode()) > 32768:
         raise ValueError("Prompt must be nonempty and bounded to 32 KiB")
     snapshot.validate_content("task prompt", prompt.encode())
+    paths = scope_paths(control, scope, modules)
+    tests = scoped_tests(control, paths, tests, scope)
+    if getattr(control, "PROFILE", None):
+        import configuration
+        configuration.verify_checkout(control.PROFILE)
     data = control.state()
     revision = control.effective(data["policy"])
     control.verify_tools(data)
@@ -290,7 +335,6 @@ def _run(
         if base == branch:
             raise ValueError("Publication head and base must differ")
         publication_preflight(control, data)  # Avoid paid work for a known blocked publication.
-    paths = scope_paths(control, scope, modules)
     control.refresh(data, names=paths)
     if getattr(control, "PROFILE", None):
         import configuration
