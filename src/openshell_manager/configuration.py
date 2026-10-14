@@ -4,9 +4,11 @@ import re
 import subprocess
 from pathlib import Path
 
-import snapshot
+from . import snapshot
 
-DEFAULTS = Path(__file__).resolve().parents[2] / 'config/defaults/phase2.json'
+from .assets import RESOURCES
+
+DEFAULTS = RESOURCES / 'config/defaults/phase2.json'
 
 
 def require(ok, message):

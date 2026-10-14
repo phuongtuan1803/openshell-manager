@@ -7,10 +7,10 @@ import re
 import time
 import uuid
 
-import github_provider
-import snapshot
+from . import github_provider
+from . import snapshot
 
-import agents
+from . import agents
 
 REPOSITORY = "example/project"
 PROVIDER = "example-github"
@@ -164,7 +164,7 @@ def publish(
 ):
     """Apply a validated patch to a real repository clone; never push snapshot history."""
     if getattr(control, "PROFILE", None):
-        import configuration
+        from . import configuration
         configuration.verify_checkout(control.PROFILE)
     if getattr(control, 'PROFILE', None):
         paths = data['scope_manifest'] if 'scope_manifest' in data else control.manifest()
@@ -318,7 +318,7 @@ def _run(
     paths = scope_paths(control, scope, modules)
     tests = scoped_tests(control, paths, tests, scope)
     if getattr(control, "PROFILE", None):
-        import configuration
+        from . import configuration
         configuration.verify_checkout(control.PROFILE)
     data = control.state()
     revision = control.effective(data["policy"])
@@ -337,7 +337,7 @@ def _run(
         publication_preflight(control, data)  # Avoid paid work for a known blocked publication.
     control.refresh(data, names=paths)
     if getattr(control, "PROFILE", None):
-        import configuration
+        from . import configuration
         data["writable"] = [p for p in paths if p in configuration.paths(control.EDIT_SCOPE)]
     else:
         data["writable"] = [p for p in paths if p.rsplit("/", 1)[-1] != "AGENTS.md"]

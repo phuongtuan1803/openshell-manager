@@ -22,36 +22,36 @@ import uuid
 from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 
-import bootstrap
-import github_provider
-import snapshot
-import workflow
+from . import bootstrap
+from . import github_provider
+from . import snapshot
+from . import workflow
 
-import agents
+from . import agents
 
-HERE = Path(__file__).resolve().parent
-PROJECT_ROOT = HERE.parent.parent
+from . import provenance
+from .assets import ROOT as HERE, RESOURCES as PROJECT_ROOT
 REPO = None  # Assigned only from a validated project profile.
 STATE = Path.home() / ".local/state/openshell-manager/unconfigured"
 CONFIG = PROJECT_ROOT / "config/defaults/phase2.json"
 NAME = "example-dev-phase2"  # Never accept arbitrary resource names from guest data/environment.
 PROFILE = None
 WORKSPACE = "/sandbox/project/checkout"
-SOURCE_MANIFEST = PROJECT_ROOT / "tests/fixtures/legacy/source-manifest.txt"
-EDIT_SCOPE = PROJECT_ROOT / "tests/fixtures/legacy/edit-scope.txt"
+SOURCE_MANIFEST = None  # External project-owned scopes, assigned by configure.
+EDIT_SCOPE = None
 PROVIDER_PROFILE = PROJECT_ROOT / "config/policies/github.yaml"
 MAX_TRANSFER = 8 * 1024 * 1024
 
 
 def configure(project, host=None, install_dependencies=False, base_branch=None):
     global PROFILE, REPO, STATE, CONFIG, NAME, WORKSPACE, SOURCE_MANIFEST, EDIT_SCOPE, PROVIDER_PROFILE
-    import configuration
+    from . import configuration
+    pin = configuration.file(project).get('manager_revision')
+    provenance.verify(pin)
     cfg = configuration.load(project, host)
     require(base_branch is None or base_branch == cfg["base_branch"], "Base branch differs from project profile")
     for rule in cfg['rules']:
         validate_rule({**rule, 'binaries': [rule['binary']] if 'binary' in rule else ['/usr/bin/codex']})
-    revision = command(['git', '-C', str(HERE), 'rev-parse', 'HEAD']).stdout.strip()
-    require(revision == cfg['manager_revision'], 'Manager revision mismatch; no automatic update')
     target = cfg['state']
     safe_dir(target)
     binding = {k: str(cfg[k]) for k in ('id', 'root', 'repository', 'sandbox', 'workspace', 'manager_revision')}
@@ -582,7 +582,7 @@ def current(data):
 
 def refresh(data, names=None):
     if PROFILE:
-        import configuration
+        from . import configuration
         configuration.verify_checkout(PROFILE)
     # Every refresh uses a new destination; old work is preserved.
     names = manifest() if names is None else names
@@ -821,7 +821,7 @@ def patch_from_files(baseline, files, scope=None):
 
 def export_patch(data):
     if PROFILE:
-        import configuration
+        from . import configuration
         configuration.verify_checkout(PROFILE)
     value, provenance = current(data)
     result = guest("collect", root=value["root"], provenance=provenance)
@@ -1224,7 +1224,7 @@ def start(action, model=None, base="main", locked=False):
         )
 
 
-def main():
+def main(argv=None):
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -1245,7 +1245,7 @@ def main():
     parser.add_argument("--host", type=Path, default=os.environ.get("MANAGER_HOST"))
     parser.add_argument("--base-branch")
     parser.add_argument("--test-path", action="append", default=[])
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     try:
         require(args.project is not None, "Example configuration is inert; supply --project or MANAGER_PROJECT")
         require(not any(k.startswith("OPENSHELL_") for k in os.environ),
@@ -1384,7 +1384,7 @@ def main():
                     require(not task_active(), "Active session/task; refresh refused")
                     names = workflow.scope_paths(sys.modules[__name__], args.scope, args.module)
                     refresh(data, names)
-                    import configuration
+                    from . import configuration
                     data["writable"] = [p for p in names if p in configuration.paths(EDIT_SCOPE)]
                     save(STATE / "state.json", data)
                 else:

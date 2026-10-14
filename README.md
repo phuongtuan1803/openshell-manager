@@ -19,20 +19,27 @@ tests/                   Offline regression suite and fixtures
 docs/                    Plans, migration evidence and decisions
 ```
 
+Legacy `config/defaults`, `config/policies`, Gateway example and Docker files link
+to canonical assets in `src/openshell_manager/resources`. Guest/session payloads
+remain canonical Python modules and are read through `importlib.resources`.
+
 ## Usage
 
-Require Python 3.11+ and Git; setup can provision PyYAML on supported Linux hosts
-only after validating the project and host profile. Fill in the reviewed image
+Install the CLI with uv from an approved full Git SHA; see the
+[installation, update and rollback runbook](docs/packaging.md). PyYAML is provided
+by the package environment. Require Python 3.11+ and Git. Fill in the reviewed image
 digest and immutable Manager commit; the provided examples cannot operate as-is.
 
 ```bash
+uv tool install "git+https://github.com/phuongtuan1803/openshell-manager.git@<FULL_MANAGER_COMMIT_SHA>"
+openshell-manager version
 export MANAGER_PROJECT=/absolute/path/to/project/project.json
 # Optional: export MANAGER_HOST=/absolute/private/path/host.json
-./scripts/setup.sh --dry-run
-./scripts/setup.sh --check
-./scripts/setup.sh                 # Explicit host operation; may install/start resources
-./scripts/start.sh codex
-./scripts/verify.sh
+openshell-manager setup --dry-run
+openshell-manager setup --check
+openshell-manager setup            # Explicit host operation; may install/start resources
+openshell-manager start codex
+openshell-manager verify
 ```
 
 The scripts are **not** ordinary offline checks: setup can install host software,
@@ -43,7 +50,10 @@ state or tool pins. Never put host tokens or runtime state in this public reposi
 ## Offline verification
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q
+uv lock --check
+uv build
+uv run --locked python -m pytest -q
+uv run --locked python tools/verify_packaging.py
 ```
 
 Offline tests use mocked host tools and local Git fixtures. Claude/OpenCode live

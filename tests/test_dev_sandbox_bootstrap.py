@@ -9,9 +9,9 @@ from types import SimpleNamespace
 import pytest
 
 HERE = Path(__file__).resolve().parents[1] / "src/openshell_manager"
-sys.path.insert(0, str(HERE))
-bootstrap = importlib.import_module("bootstrap")
-control = importlib.import_module("control")
+sys.path.insert(0, str(HERE.parent))
+bootstrap = importlib.import_module("openshell_manager.bootstrap")
+control = importlib.import_module("openshell_manager.control")
 sys.path.pop(0)
 
 
@@ -211,13 +211,9 @@ def test_missing_yaml_bootstrap_is_explicit_and_pinned_dependency_only(monkeypat
     monkeypatch.setattr(bootstrap.platform, 'system', lambda: 'Linux')
     monkeypatch.setattr(bootstrap.platform, 'machine', lambda: 'x86_64')
     monkeypatch.setattr(Path, 'exists', lambda p: str(p) == '/etc/debian_version')
-    if install:
-        assert bootstrap.yaml_module(lambda argv, **kwargs: calls.append(argv), install=True) is ready
-        assert calls == [['sudo', 'apt-get', 'update'], ['sudo', 'apt-get', 'install', '-y', 'python3-yaml']]
-    else:
-        with pytest.raises(ValueError, match='PyYAML missing'):
-            bootstrap.yaml_module(lambda argv, **kwargs: calls.append(argv))
-        assert not calls
+    with pytest.raises(ValueError, match='PyYAML missing'):
+        bootstrap.yaml_module(lambda argv, **kwargs: calls.append(argv), install=install)
+    assert not calls
 
 
 def test_existing_yaml_requires_no_install(monkeypatch):
@@ -231,5 +227,5 @@ def test_unsupported_yaml_bootstrap_host_is_not_changed(monkeypatch):
         raise ModuleNotFoundError(name='yaml')
     monkeypatch.setattr(bootstrap.importlib, 'import_module', missing)
     monkeypatch.setattr(bootstrap.platform, 'system', lambda: 'Darwin')
-    with pytest.raises(ValueError, match='unsupported'):
+    with pytest.raises(ValueError, match='PyYAML missing'):
         bootstrap.yaml_module(lambda *a, **k: pytest.fail('Unsupported host changed'), install=True)

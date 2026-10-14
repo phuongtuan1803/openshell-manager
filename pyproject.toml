@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "openshell-manager"
+version = "0.1.0"
+description = "Project-scoped OpenShell sandbox manager"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["PyYAML==6.0.3"]
+
+[project.scripts]
+openshell-manager = "openshell_manager.cli:main"
+
+[dependency-groups]
+dev = ["pytest==8.4.2"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openshell_manager"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/scripts", "/tests", "/tools/verify_packaging.py", "/docs", "/README.md", "/pyproject.toml", "/uv.lock", "/pytest.ini"]

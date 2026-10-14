@@ -12,6 +12,8 @@ import tempfile
 import uuid
 from pathlib import Path
 
+from .assets import RESOURCES
+
 PROVIDER = "example-github"
 REPOSITORY = "example/project"
 RULE = "_provider_example_github"
@@ -30,7 +32,7 @@ PERMISSIONS = (
 def profile(control):
     import yaml
 
-    return yaml.safe_load(getattr(control, "PROVIDER_PROFILE", Path(__file__).resolve().parents[2] / "config/policies/github.yaml").read_text())
+    return yaml.safe_load(getattr(control, "PROVIDER_PROFILE", RESOURCES / "config/policies/github.yaml").read_text())
 
 
 def lint(control, path):
@@ -149,7 +151,7 @@ print(json.dumps({'sha256':hashlib.sha256(p.read_bytes()).hexdigest()
         control.require(not check, "Pinned guest gh missing or changed; run setup.sh")
         binary = shutil.which("gh")
         if binary is None or hashlib.sha256(Path(binary).read_bytes()).hexdigest() != GH_SHA256:
-            import bootstrap
+            from . import bootstrap
 
             binary = str(bootstrap.gh_binary(control))
         content = Path(binary).read_bytes()
@@ -283,7 +285,7 @@ def verify(control, data):
 
 
 def reconcile(control, data, mode="apply"):
-    path = getattr(control, "PROVIDER_PROFILE", Path(__file__).resolve().parents[2] / "config/policies/github.yaml")
+    path = getattr(control, "PROVIDER_PROFILE", RESOURCES / "config/policies/github.yaml")
     lint(control, path)
     wanted = profile(control)
     profiles = control.api("provider", "profile", "list")

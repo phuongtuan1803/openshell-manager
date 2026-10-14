@@ -12,9 +12,9 @@ import pytest
 import yaml
 
 HERE = Path(__file__).resolve().parents[1] / "src/openshell_manager"
-sys.path.insert(0, str(HERE))
-provider = importlib.import_module("github_provider")
-control = importlib.import_module("control")
+sys.path.insert(0, str(HERE.parent))
+provider = importlib.import_module("openshell_manager.github_provider")
+control = importlib.import_module("openshell_manager.control")
 sys.path.pop(0)
 
 
@@ -78,7 +78,7 @@ def native(monkeypatch, tmp_path):
             assert provider.comparable(value) == provider.comparable(wanted)
             state["profile"] = {**value, "resource_version": value["resource_version"] + 1}
         if args[:3] == ("provider", "profile", "import"):
-            assert Path(args[args.index("-f") + 1]) == HERE.parents[1] / "config/policies/github.yaml"
+            assert Path(args[args.index("-f") + 1]) == HERE / "resources/config/policies/github.yaml"
             state["profile"] = {**copy.deepcopy(wanted), "resource_version": 1}
         if args[:2] == ("provider", "create"):
             assert not state["exists"] and "--from-existing" in args
@@ -215,7 +215,7 @@ def test_native_lint_duplicate_id_uses_temporary_id_only(native):
         path = Path(args[-1])
         calls.append(path)
         value = yaml.safe_load(path.read_text())
-        if path == HERE.parents[1] / "config/policies/github.yaml":
+        if path == HERE / "resources/config/policies/github.yaml":
             return subprocess.CompletedProcess(args, 1, "already exists", "")
         assert value["id"].startswith("manager-lint-")
         value["id"] = provider.PROVIDER
@@ -223,7 +223,7 @@ def test_native_lint_duplicate_id_uses_temporary_id_only(native):
         return subprocess.CompletedProcess(args, 0, "", "")
 
     fake.oshell = native_lint
-    provider.lint(fake, HERE.parents[1] / "config/policies/github.yaml")
+    provider.lint(fake, HERE / "resources/config/policies/github.yaml")
     assert len(calls) == 2
 
 
