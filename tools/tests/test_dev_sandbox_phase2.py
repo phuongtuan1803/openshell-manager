@@ -324,8 +324,8 @@ def test_repeat_setup_reuses_resources(monkeypatch, tmp_path):
             "phase": "Ready",
             "configuration_admission": {"state": "accepted"},
             "labels": {
-                "oma.phase": "2",
-                "oma.image": control.settings()["image_id"].split(":")[1][:32],
+                "manager.phase": "2",
+                "manager.image": control.settings()["image_id"].split(":")[1][:32],
             },
         },
     )
@@ -485,7 +485,7 @@ def test_fresh_setup_creates_only_named_vm_with_manual_approval(monkeypatch, tmp
             "name": control.NAME,
             "phase": "Ready",
             "configuration_admission": {"state": "accepted"},
-            "labels": {"oma.phase": "2", "oma.image": pinned.split(":")[1][:32]},
+            "labels": {"manager.phase": "2", "manager.image": pinned.split(":")[1][:32]},
         },
     )
     monkeypatch.setattr(control, "effective", lambda _: {})

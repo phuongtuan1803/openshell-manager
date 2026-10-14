@@ -21,8 +21,8 @@ SSH_REMOTES = {
     "git@github.com:example/project.git",
     "ssh://git@github.com/example/project.git",
 }
-ROOT = Path("/sandbox/oma")
-LOCK = Path("/sandbox/.oma-source.lock")
+ROOT = Path("/sandbox/project/checkout")
+LOCK = Path("/sandbox/.manager-source.lock")
 AUTH_FIX = "Run ./infra/dev-sandbox/github.sh credential in a private host terminal, then setup.sh."
 CREDENTIAL_SCRIPT = """import os,sys
 if sys.argv[-1] != 'get': sys.exit(0)
@@ -105,7 +105,8 @@ def git(args, root=ROOT, env=None, check=True):
 
 
 @contextmanager
-def lease(path=LOCK, shared=False):
+def lease(path=None, shared=False):
+    path = LOCK if path is None else path
     if path.is_symlink():
         raise ValueError("Unsafe source lock path")
     with path.open("a") as lock:
@@ -136,8 +137,8 @@ def unmanaged_agent():
 
 
 def synchronize(root=ROOT, base="main", check=False, run=git, active=None):
-    if not re.fullmatch(r"main|feat/openshell-[a-z0-9][a-z0-9-]{1,70}", base):
-        raise ValueError("Unsupported base branch; use main or feat/openshell-<name>.")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_/-]{0,100}", base) or ".." in base or "//" in base or base.endswith("/"):
+        raise ValueError("Invalid configured base branch.")
     if active is None:
         active = unmanaged_agent()
     if active:
@@ -146,10 +147,10 @@ def synchronize(root=ROOT, base="main", check=False, run=git, active=None):
         raise ValueError("Checkout path contains a symlink; work preserved.")
     if not root.exists():
         if check:
-            raise ValueError("OMA checkout missing. Run setup.sh.")
+            raise ValueError("Project checkout missing. Run setup.sh.")
         # Clone into a private sibling and publish only after success. Never adopt
         # an interrupted, partially populated destination or overwrite existing work.
-        with tempfile.TemporaryDirectory(prefix=".oma-clone-", dir=root.parent) as temporary:
+        with tempfile.TemporaryDirectory(prefix=".manager-clone-", dir=root.parent) as temporary:
             clone = Path(temporary) / "checkout"
             run(["clone", "--branch", base, "--", REMOTE, str(clone)], root=root.parent)
             if root.exists():
@@ -157,7 +158,7 @@ def synchronize(root=ROOT, base="main", check=False, run=git, active=None):
             clone.rename(root)
         return {"status": "PASS", "state": "cloned", "branch": base}
     if not (root / ".git").is_dir() or (root / ".git").is_symlink():
-        raise ValueError("/sandbox/oma is not a standalone Git checkout; work preserved.")
+        raise ValueError("/sandbox/project/checkout is not a standalone Git checkout; work preserved.")
 
     def read(*args):
         return run(list(args), root=root).stdout.strip()
@@ -169,18 +170,18 @@ def synchronize(root=ROOT, base="main", check=False, run=git, active=None):
     pushes = push.stdout.strip().splitlines() if push.returncode == 0 else []
     allowed = {REMOTE, REMOTE.removesuffix(".git"), *SSH_REMOTES}
     if len(urls) != 1 or urls[0] not in allowed or any(u not in allowed for u in pushes):
-        raise ValueError("Unsupported OMA origin or push URL. Set only OMA origin to " + REMOTE)
+        raise ValueError("Unsupported Project origin or push URL. Set only Project origin to " + REMOTE)
+    if read("status", "--porcelain"):
+        return {"status": "SKIP", "state": "dirty", "fix": "Commit or stash when ready; retry."}
     if check and (urls != [REMOTE] or any(u != REMOTE for u in pushes)):
-        raise ValueError("OMA origin needs HTTPS migration. Run setup.sh; SSH is unnecessary.")
+        raise ValueError("Project origin needs HTTPS migration. Run setup.sh; SSH is unnecessary.")
     if not check:
         if urls != [REMOTE]:
             run(["remote", "set-url", "origin", REMOTE], root=root)
         if pushes and pushes != [REMOTE]:
             run(["config", "--replace-all", "remote.origin.pushurl", REMOTE], root=root)
-    # Read-only authentication probe even when dirty. No fetch/pull while active.
+    # Probe only after confirming the checkout is clean and inactive.
     run(["ls-remote", "--exit-code", "origin", "refs/heads/" + base], root=root)
-    if read("status", "--porcelain"):
-        return {"status": "SKIP", "state": "dirty", "fix": "Commit or stash when ready; retry."}
     branch = read("branch", "--show-current")
     if branch != base:
         return {
@@ -209,7 +210,22 @@ def synchronize(root=ROOT, base="main", check=False, run=git, active=None):
 
 
 def main():
+    global REMOTE, SSH_REMOTES, ROOT, LOCK, CREDENTIAL_SCRIPT
     request = json.loads(base64.b64decode(sys.argv[1]))
+    if 'repository' in request:
+        repo, project = request['repository'], request['project_id']
+        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9_.-]*', repo) or not re.fullmatch(r'[a-z][a-z0-9-]{1,30}', project):
+            raise ValueError('Invalid host project identity')
+        if request['workspace'] != '/sandbox/' + project + '/checkout':
+            raise ValueError('Invalid host workspace')
+        CREDENTIAL_SCRIPT = CREDENTIAL_SCRIPT.replace('example/project', repo)
+        REMOTE = 'https://github.com/' + repo + '.git'
+        SSH_REMOTES = {'git@github.com:' + repo + '.git', 'ssh://git@github.com/' + repo + '.git'}
+        ROOT = Path(request['workspace'])
+        LOCK = Path('/sandbox/' + project + '/source.lock')
+        LOCK.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if LOCK.parent.resolve() != LOCK.parent:
+            raise ValueError('Symlink project workspace')
     env = environment()
     action = request["action"]
     if action == "git":
@@ -221,6 +237,7 @@ def main():
             sys.exit(subprocess.call(request["argv"], cwd=request["root"], env=env))
     with lease():
         result = synchronize(
+            root=ROOT,
             base=request.get("base", "main"),
             check=request.get("read_only", False),
         )
@@ -229,7 +246,7 @@ def main():
             return
         if result["state"] == "active-agent":
             raise ValueError("Concurrent active agent; exit that session and retry. Work retained.")
-        print("Repository: " + result["state"] + " in /sandbox/oma", flush=True)
+        print("Repository: " + result["state"] + " in " + str(ROOT), flush=True)
         if result.get("fix"):
             print(result["fix"], flush=True)
         # argv is fixed by the host, never loaded from downloaded repository code.

@@ -7,5 +7,6 @@ case "${1:-}" in
   --reports)
     echo 'OMA report rendering is not imported. See docs/migration/pr1-import-inventory.md.' >&2
     exit 2 ;;
-  *) echo 'Usage: verify.sh (host readiness; no model calls)' >&2; exit 2 ;;
+  --project|--host) exec "$ROOT/setup.sh" --check "$@" ;;
+  *) echo 'Usage: verify.sh [--project FILE] [--host FILE]' >&2; exit 2 ;;
 esac

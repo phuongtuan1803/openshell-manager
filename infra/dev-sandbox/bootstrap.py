@@ -78,7 +78,7 @@ def host(control):
                 result = run([tool, "--version"])
                 if "0.1.2" not in result.stdout:
                     raise ValueError("Incompatible OpenShell preserved; install release 0.1.2.")
-        with tempfile.TemporaryDirectory(prefix="oma-openshell-install-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="manager-openshell-install-") as temporary:
             path = Path(temporary) / "openshell.deb"
             download(DEB_URL, path, DEB_SHA)
             run(["sudo", "dpkg", "--unpack", str(path)], interactive=True, timeout=600)
@@ -142,7 +142,7 @@ def gh_binary(control):
     import tarfile
 
     local = control.STATE / "tools/gh"
-    with tempfile.TemporaryDirectory(prefix="oma-gh-install-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="manager-gh-install-") as temporary:
         archive = Path(temporary) / "gh.tar.gz"
         download(GH_URL, archive, GH_ARCHIVE_SHA)
         with tarfile.open(archive) as tar:

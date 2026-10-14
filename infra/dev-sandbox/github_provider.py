@@ -30,7 +30,7 @@ PERMISSIONS = (
 def profile(control):
     import yaml
 
-    return yaml.safe_load((control.HERE / "policies/github.yaml").read_text())
+    return yaml.safe_load(getattr(control, "PROVIDER_PROFILE", control.HERE / "policies/github.yaml").read_text())
 
 
 def lint(control, path):
@@ -43,12 +43,12 @@ def lint(control, path):
     )
     # 0.1.2 lint also checks registry uniqueness. Validate identical content under
     # a temporary, unregistered ID; import/update still reads only the canonical file.
-    with tempfile.TemporaryDirectory(prefix="oma-profile-lint-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="manager-profile-lint-") as temporary:
         candidate = Path(temporary) / "github.yaml"
         content = path.read_text()
-        control.require(content.count("\nid: example-github\n") == 1, "Canonical profile ID drift")
+        control.require(("\n" + content).count("\nid: " + PROVIDER + "\n") == 1, "Canonical profile ID drift")
         candidate.write_text(
-            content.replace("\nid: example-github\n", "\nid: oma-lint-" + uuid.uuid4().hex + "\n")
+            ("\n" + content).replace("\nid: " + PROVIDER + "\n", "\nid: manager-lint-" + uuid.uuid4().hex + "\n")
         )
         control.oshell("provider", "profile", "lint", "-f", str(candidate))
 
@@ -283,7 +283,7 @@ def verify(control, data):
 
 
 def reconcile(control, data, mode="apply"):
-    path = control.HERE / "policies/github.yaml"
+    path = getattr(control, "PROVIDER_PROFILE", control.HERE / "policies/github.yaml")
     lint(control, path)
     wanted = profile(control)
     profiles = control.api("provider", "profile", "list")
@@ -299,7 +299,7 @@ def reconcile(control, data, mode="apply"):
         control.require(mode != "check", "Canonical GitHub profile changed; run setup.sh")
         if installed:
             # Registry revision is concurrency metadata, not a second policy source.
-            with tempfile.TemporaryDirectory(prefix="oma-profile-update-") as temporary:
+            with tempfile.TemporaryDirectory(prefix="manager-profile-update-") as temporary:
                 candidate = Path(temporary) / "github.yaml"
                 control.require(
                     type(imported.get("resource_version")) is int
@@ -364,7 +364,7 @@ def reconcile(control, data, mode="apply"):
             "update",
             PROVIDER,
             "--config",
-            "oma_profile_sha256=" + hashlib.sha256(path.read_bytes()).hexdigest(),
+            "manager_profile_sha256=" + hashlib.sha256(path.read_bytes()).hexdigest(),
             "--wait",
             "--timeout",
             "30",

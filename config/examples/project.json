@@ -1,0 +1,16 @@
+{
+  "id": "my-project",
+  "repository": "owner/repository",
+  "root": "/absolute/path/to/project-checkout",
+  "sandbox": "my-project-dev",
+  "workspace": "/sandbox/my-project/checkout",
+  "source_manifest": "source-manifest.txt",
+  "edit_scope": "edit-scope.txt",
+  "base_branch": "main",
+  "test_paths": ["tests/test_app.py"],
+  "image": "placeholder-image:reviewed",
+  "image_id": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "manager_revision": "0000000000000000000000000000000000000000",
+  "rules": [],
+  "modules": {"src": ["src/app.py", "tests/test_app.py"]}
+}

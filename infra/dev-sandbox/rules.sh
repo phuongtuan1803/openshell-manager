@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-exec python3 "$ROOT/control.py" rules "${1:-status}" "${2:-}"
+action="${1:-status}"
+if (($#)); then shift; fi
+exec python3 "$ROOT/control.py" rules "$action" "$@"

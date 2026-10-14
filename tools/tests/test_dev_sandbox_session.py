@@ -142,7 +142,7 @@ def test_unsupported_identity_preserved(repository, push):
     local_git(root, "config", key, "https://github.com/example/other.git")
     config = (root / ".git/config").read_bytes()
     calls.clear()
-    with pytest.raises(ValueError, match="Unsupported OMA"):
+    with pytest.raises(ValueError, match="Unsupported Project"):
         sync()
     assert (root / ".git/config").read_bytes() == config
     assert not any(c[0] in {"fetch", "merge", "remote", "ls-remote"} for c in calls)
@@ -191,7 +191,7 @@ def test_interrupted_clone_retry_preserves_existing_source(tmp_path):
     with pytest.raises(ValueError, match="interrupted clone"):
         session.synchronize(root=root, run=failed, active=False)
     assert not root.exists()
-    assert not list(tmp_path.glob(".oma-clone-*"))
+    assert not list(tmp_path.glob(".manager-clone-*"))
     root.mkdir()
     (root / "precious.txt").write_text("keep")
     with pytest.raises(ValueError, match="standalone Git checkout"):
@@ -338,3 +338,26 @@ def test_active_session_cannot_launch(monkeypatch):
     )
     with pytest.raises(ValueError, match="Concurrent active agent"):
         session.main()
+
+
+@pytest.mark.parametrize('check', [False, True])
+def test_dirty_ssh_origin_never_migrated(repository, check):
+    root, _, _, calls, sync = repository
+    sync()
+    local_git(root, 'remote', 'set-url', 'origin', next(iter(session.SSH_REMOTES)))
+    (root / 'dirty.py').write_text('pass\n')
+    before = (root / '.git/config').read_bytes()
+    calls.clear()
+    assert sync(check=check)['state'] == 'dirty'
+    assert (root / '.git/config').read_bytes() == before
+    assert not any(c[0] in {'remote', 'fetch', 'merge', 'ls-remote'} for c in calls)
+
+
+def test_source_lease_uses_runtime_project_lock(monkeypatch, tmp_path):
+    path = tmp_path / 'project-source.lock'
+    monkeypatch.setattr(session, 'LOCK', path)
+    with session.lease(shared=True):
+        assert path.is_file()
+        with pytest.raises(ValueError, match='Concurrent active agent'):
+            with session.lease():
+                pytest.fail('Runtime source lock must exclude sync')

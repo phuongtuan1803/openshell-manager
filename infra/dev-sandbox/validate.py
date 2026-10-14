@@ -46,8 +46,8 @@ def validate(sandbox: str) -> dict:
     if state["phase"] != "Ready" or state["configuration_admission"]["state"] != "accepted":
         raise ValueError("Sandbox must be Ready with accepted configuration; inspect status/logs")
     probes = Path(__file__).with_name("validate_guest.py")
-    destination = "/sandbox/oma-probes-" + uuid.uuid4().hex
-    with tempfile.TemporaryDirectory(prefix="oma-host-dummy-") as temp:
+    destination = "/sandbox/manager-probes-" + uuid.uuid4().hex
+    with tempfile.TemporaryDirectory(prefix="manager-host-dummy-") as temp:
         directory = Path(temp)
         directory.chmod(0o755)
         dummy = directory / "dummy.txt"
@@ -114,7 +114,7 @@ def validate(sandbox: str) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sandbox", default="oma-dev-validation")
+    parser.add_argument("--sandbox", required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     # Reserve output first; never overwrite prior evidence or start probes on collision.

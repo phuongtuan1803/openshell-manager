@@ -30,11 +30,55 @@ import workflow
 import agents
 
 HERE = Path(__file__).resolve().parent
-REPO = HERE.parent.parent
-STATE = REPO / ".work/openshell-phase2"
+REPO = None  # Assigned only from a validated project profile.
+STATE = Path.home() / ".local/state/openshell-manager/unconfigured"
 CONFIG = HERE / "phase2.json"
 NAME = "example-dev-phase2"  # Never accept arbitrary resource names from guest data/environment.
+PROFILE = None
+WORKSPACE = "/sandbox/project/checkout"
+SOURCE_MANIFEST = HERE / "source-manifest.txt"
+EDIT_SCOPE = HERE / "edit-scope.txt"
+PROVIDER_PROFILE = HERE / "policies/github.yaml"
 MAX_TRANSFER = 8 * 1024 * 1024
+
+
+def configure(project, host=None):
+    global PROFILE, REPO, STATE, CONFIG, NAME, WORKSPACE, SOURCE_MANIFEST, EDIT_SCOPE, PROVIDER_PROFILE
+    import configuration
+    cfg = configuration.load(project, host)
+    for rule in cfg['rules']:
+        validate_rule({**rule, 'binaries': [rule['binary']] if 'binary' in rule else ['/usr/bin/codex']})
+    revision = command(['git', '-C', str(HERE), 'rev-parse', 'HEAD']).stdout.strip()
+    require(revision == cfg['manager_revision'], 'Manager revision mismatch; no automatic update')
+    target = cfg['state']
+    safe_dir(target)
+    binding = {k: str(cfg[k]) for k in ('id', 'root', 'repository', 'sandbox', 'workspace', 'manager_revision')}
+    # A project ID permanently binds its resource and credential namespace.
+    lock_path = target / 'binding.lock'
+    require(not lock_path.is_symlink(), 'Symlink binding lock')
+    with lock_path.open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        path = target / 'project-binding.json'
+        if path.exists():
+            require(read(path) == binding, 'Conflicting project identity or Manager pin; existing state preserved')
+        else:
+            require(not (target / 'state.json').exists(), 'Unbound existing state; migration review required')
+            save(path, binding)
+    PROFILE, REPO, STATE = cfg, Path(cfg['root']), target
+    CONFIG, NAME, WORKSPACE = Path(project).absolute(), cfg['sandbox'], cfg['workspace']
+    SOURCE_MANIFEST, EDIT_SCOPE = cfg['source_manifest'], cfg['edit_scope']
+    PROVIDER_PROFILE = STATE / 'github-profile.yaml'
+    import yaml
+    content = yaml.safe_dump(configuration.provider_profile(cfg), sort_keys=False)
+    require(not PROVIDER_PROFILE.is_symlink(), 'Symlink provider profile')
+    if PROVIDER_PROFILE.exists():
+        require(PROVIDER_PROFILE.read_text() == content, 'Provider profile drift; review before host operations')
+    else:
+        with PROVIDER_PROFILE.open('x') as stream:
+            stream.write(content)
+    github_provider.PROVIDER = workflow.PROVIDER = cfg['github']['provider']
+    github_provider.REPOSITORY = workflow.REPOSITORY = cfg['repository']
+    github_provider.RULE = '_provider_' + cfg['github']['provider'].replace('-', '_')
 
 
 def digest(data):
@@ -89,16 +133,16 @@ def api(*args):
 
 
 def settings():
-    data = read(CONFIG)
+    data = PROFILE if PROFILE is not None else read(CONFIG)
     require(data["sandbox"] == NAME, "Phase 2 resource name drift")
     return data
 
 
 def config_hash():
     return digest(
-        CONFIG.read_bytes()
-        + (HERE / "source-manifest.txt").read_bytes()
-        + (HERE / "edit-scope.txt").read_bytes()
+        (json.dumps(PROFILE, sort_keys=True, default=str).encode() if PROFILE else CONFIG.read_bytes())
+        + SOURCE_MANIFEST.read_bytes()
+        + EDIT_SCOPE.read_bytes()
     )
 
 
@@ -123,7 +167,9 @@ def execute(*args, interactive=False, workdir="/sandbox", check=True, timeout=12
 
 
 def session(action, *, interactive=False, check=True, timeout=300, **fields):
-    payload = base64.b64encode(json.dumps({"action": action, **fields}).encode()).decode()
+    project = {"repository": PROFILE["repository"], "workspace": WORKSPACE,
+               "project_id": PROFILE["id"], "base": PROFILE["base_branch"]} if PROFILE else {}
+    payload = base64.b64encode(json.dumps({"action": action, **project, **fields}).encode()).decode()
     return execute(
         "/usr/bin/python3",
         "-I",
@@ -147,7 +193,7 @@ def sync_checkout(check=False, base="main"):
         return value
     result = session("sync", read_only=check, base=base)
     value = json.loads(result.stdout)
-    print(f"{value['status']}: OMA /sandbox/oma {value['state']}")
+    print(f"{value['status']}: {WORKSPACE} {value['state']}")
     if value.get("fix"):
         print(value["fix"])
     return value
@@ -306,25 +352,26 @@ def image(check=False):
         ["docker", "image", "inspect", cfg["image_id"], "--format", "{{.Id}}"], check=False
     )
     if result.returncode:
+        require(PROFILE is None, "Reviewed project image digest missing; provision explicitly before setup")
         recipe = digest((HERE / "Dockerfile").read_bytes())
         built = command(["docker", "image", "inspect", cfg["image"]], check=False)
         info = json.loads(built.stdout)[0] if built.returncode == 0 else None
         if info:
             require(
-                info["Config"].get("Labels", {}).get("oma.dockerfile") == recipe,
+                info["Config"].get("Labels", {}).get("manager.dockerfile") == recipe,
                 "Existing image tag has an incompatible recipe; preserved for review",
             )
         require(info or not check, "Pinned image missing; run setup.sh to build the image")
         # Build in an empty context: never send repository/secrets to Docker.
         if not info:
-            with tempfile.TemporaryDirectory(prefix="oma-phase2-build-") as temp:
+            with tempfile.TemporaryDirectory(prefix="manager-build-") as temp:
                 shutil.copyfile(HERE / "Dockerfile", Path(temp) / "Dockerfile")
                 command(
                     [
                         "docker",
                         "build",
                         "--label",
-                        "oma.dockerfile=" + recipe,
+                        "manager.dockerfile=" + recipe,
                         "-t",
                         cfg["image"],
                         temp,
@@ -492,14 +539,14 @@ def login_status(data):
 def manifest():
     names = [
         line.strip()
-        for line in (HERE / "source-manifest.txt").read_text().splitlines()
+        for line in SOURCE_MANIFEST.read_text().splitlines()
         if line.strip() and not line.startswith("#")
     ]
     for name in names:
         snapshot.validate_path(name)
         require(
-            re.fullmatch(r"[A-Za-z0-9_./-]+", name) and name.endswith((".py", ".md")),
-            "Phase 2 scope permits plain Python/Markdown source files only",
+            re.fullmatch(r"[A-Za-z0-9_./-]+", name) and name.endswith((".py", ".md", ".toml", ".yaml", ".yml", ".json", ".sh", ".sql", ".txt")),
+            "Source manifest permits reviewed plain source files only",
         )
     require(names and len(set(names)) == len(names), "Manifest must be nonempty and unique")
     return names
@@ -533,7 +580,7 @@ def refresh(data, names=None):
     local = f"snapshots/{token}/source"
     safe_dir((STATE / local).parent)
     provenance = snapshot.export(REPO, "HEAD", names, STATE / local)
-    destination = f"/sandbox/oma-phase2/snapshots/{token}"
+    destination = f"/sandbox/{PROFILE['id'] if PROFILE else 'project'}/snapshots/{token}"
     oshell("sandbox", "upload", "--no-git-ignore", NAME, str(STATE / local), destination)
     root = destination + "/source"  # CLI preserves the uploaded directory basename.
     guest("initialize", root=root, provenance=provenance)
@@ -557,18 +604,20 @@ def setup(mode):
             "image (verify or build)",
             "MicroVM (reuse or create)",
             "GitHub Provider + gh",
-            "OMA HTTPS clone / safe sync",
+            "Project HTTPS clone / safe sync",
             "Codex login + directory",
         ):
             print(f"SKIP    {label}: setup.sh applies this step; no changes in dry-run")
         return
+    require(not task_active(), "Active session/task; setup refused")
     preflight()
     image_id = image(check=mode != "apply")
     listing = oshell("sandbox", "list").stdout
     exists = any(line.split() and line.split()[0] == NAME for line in listing.splitlines())
+    require(not exists or (STATE / "state.json").is_file(), "Existing sandbox without bound state; refusing adoption")
     if not exists:
         require(mode != "check", "Development sandbox missing; run setup.sh")
-        image_ref = "example-dev-phase2:" + image_id.split(":")[1][:12]
+        image_ref = NAME + ":" + image_id.split(":")[1][:12]
         command(["docker", "tag", image_id, image_ref])
         empty_policy = base_policy()
         safe_dir(STATE)
@@ -586,9 +635,10 @@ def setup(mode):
             "--approval-mode",
             "manual",
             "--label",
-            "oma.phase=2",
+            "manager.phase=2",
             "--label",
-            "oma.image=" + image_id.split(":")[1][:32],
+            "manager.image=" + image_id.split(":")[1][:32],
+            *(["--label", "manager.project=" + PROFILE["id"]] if PROFILE else []),
             "--detach",
             "--no-tty",
             "--",
@@ -599,12 +649,17 @@ def setup(mode):
     info = api("sandbox", "get", NAME)
     ready(info)
     require(
-        info["labels"].get("oma.phase") == "2"
-        and info["labels"].get("oma.image") == image_id.split(":")[1][:32],
+        info["labels"].get("manager.phase") == "2"
+        and info["labels"].get("manager.image") == image_id.split(":")[1][:32],
         "Existing resource ownership/image drift; refusing adoption",
     )
+    if PROFILE:
+        require(info["labels"].get("manager.project") == PROFILE["id"], "Project ownership label mismatch")
+        probe = (HERE / "session.py").read_text().split('if __name__ == "__main__":')[0]
+        active = execute("/usr/bin/python3", "-I", "-c", probe + "\nprint(int(unmanaged_agent()))").stdout.strip()
+        require(active == "0", "Unmanaged active guest agent; setup refused")
     if (STATE / "state.json").exists():
-        data = state(allow_config_drift=True)
+        data = state()
         verify_tools(data)
         github_provider.reconcile(sys.modules[__name__], data, mode)
     else:
@@ -641,13 +696,13 @@ def setup(mode):
         help_result = execute(
             *agents.adapter("codex").interactive(data["tools"]["launcher"]),
             "--help",
-            workdir="/sandbox/oma",
+            workdir=WORKSPACE,
         )
         require(
             "--ask-for-approval" in help_result.stdout and "--sandbox" in help_result.stdout,
             "Pinned Codex CLI flags unavailable; rerun setup.sh",
         )
-        print("PASS: Codex launches in /sandbox/oma; requested CLI flags supported (no model call)")
+        print("PASS: Codex launches in the configured workspace; requested CLI flags supported (no model call)")
     else:
         print("SKIP: Codex directory probe while another agent is active")
     login_status(data)
@@ -659,10 +714,11 @@ def setup(mode):
 
 def setup_report(mode):
     """Keep operator output concise. Never expose native CLI or guest transport logs."""
+    require(not task_active(), "Active session/task; setup refused")
     output = io.StringIO()
     print("STATUS | CHECK | NEXT STEP")
     try:
-        with redirect_stdout(output), setup_lock(mode):
+        with redirect_stdout(output), setup_lock(mode), idle_lease(mode == "apply" or STATE.exists()):
             if mode == "apply":
                 bootstrap.host(sys.modules[__name__])
                 print("PASS: Host bootstrap / gateway reuse")
@@ -680,11 +736,28 @@ def setup_report(mode):
 
 
 @contextmanager
+def idle_lease(enabled=True):
+    """Hold a shared task lease so a new interactive/agent task cannot race mutations."""
+    if not enabled:
+        yield
+        return
+    safe_dir(STATE)
+    require(not (STATE / 'task.lock').is_symlink(), 'Symlink task lock')
+    with (STATE / 'task.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError('Active session/task; operation refused') from None
+        yield
+
+
+@contextmanager
 def setup_lock(mode):
     if mode != "apply":
         yield
         return
     safe_dir(STATE)
+    require(not (STATE / "operation.lock").is_symlink(), "Symlink operation lock")
     with (STATE / "operation.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         yield
@@ -692,6 +765,7 @@ def setup_lock(mode):
 
 def task_active():
     path = STATE / "task.lock"
+    require(not path.is_symlink(), "Symlink task lock")
     if not path.exists():
         return False
     with path.open("r") as lock:
@@ -741,9 +815,9 @@ def export_patch(data):
     baseline = {
         name: (STATE / value["local"] / name).read_bytes() for name in provenance["manifest"]
     }
-    scope = data.get("writable") or [
+    scope = data["writable"] if "writable" in data else [
         line.strip()
-        for line in (HERE / "edit-scope.txt").read_text().splitlines()
+        for line in EDIT_SCOPE.read_text().splitlines()
         if line.strip() and not line.startswith("#")
     ]
     require(set(scope).issubset(baseline), "Edit scope must be inside source manifest")
@@ -1069,6 +1143,7 @@ def rules(action, identifier):
                 "Preview: append this exact approved rule to phase2.json; no native policy change."
             )
             confirm(identifier)
+            require(PROFILE is None, "Persist profile rules through a reviewed project config edit")
             cfg["rules"].append(entry)
             save(CONFIG, cfg)
             print(
@@ -1095,7 +1170,7 @@ def rules(action, identifier):
         save(STATE / "inbox.json", inbox)
 
 
-def start(action, model=None, base="main"):
+def start(action, model=None, base="main", locked=False):
     if action in {"claude", "opencode"}:
         agents.require_live(action)
     data = state()
@@ -1106,7 +1181,7 @@ def start(action, model=None, base="main"):
     effective(data["policy"])
     verify_tools(data)
     require(
-        action == "login" or not task_active(),
+        locked or not task_active(),
         "Concurrent active agent task. Wait for it to finish, then retry start.sh codex.",
     )
     if action == "shell":
@@ -1126,7 +1201,7 @@ def start(action, model=None, base="main"):
             "Agent adapter not enabled; Claude Code/OpenCode need reviewed pins and policies",
         )
         if not login_status(data):
-            start("login")
+            start("login", locked=locked)
         github_provider.verify(sys.modules[__name__], data)
         session(
             "launch",
@@ -1153,10 +1228,16 @@ def main():
     parser.add_argument("--prompt-file", type=Path)
     parser.add_argument("--attempts", type=int, default=1)
     parser.add_argument("--publish", metavar="FEATURE_BRANCH")
-    parser.add_argument("--base-branch", default="main")
+    parser.add_argument("--project", type=Path, default=os.environ.get("MANAGER_PROJECT"))
+    parser.add_argument("--host", type=Path, default=os.environ.get("MANAGER_HOST"))
+    parser.add_argument("--base-branch")
     parser.add_argument("--test-path", action="append", default=[])
     args = parser.parse_args()
     try:
+        require(args.project is not None, "Example configuration is inert; supply --project or MANAGER_PROJECT")
+        configure(args.project, args.host)
+        args.base_branch = args.base_branch or PROFILE["base_branch"]
+        require(args.base_branch == PROFILE["base_branch"], "Base branch differs from project profile")
         if args.command == "setup" and args.agent in {"claude", "opencode"}:
             require(args.action in {"apply", "check", "dry-run"}, "Invalid setup action")
             workflow.prepare(
@@ -1191,12 +1272,13 @@ def main():
             oshell("--version").stdout.strip() == settings()["cli_version"], "CLI version drift"
         )
         safe_dir(STATE)
-        with (STATE / "operation.lock").open("a") as lock:
+        require(not (STATE / "operation.lock").is_symlink(), "Symlink operation lock")
+        with (STATE / "operation.lock").open("a") as lock, idle_lease(args.command in {"refresh", "cleanup"} or (args.command == "start" and args.action in {"stop", "resume"})):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             if args.command == "start":
                 require(
                     args.scope == "pilot" and not args.module,
-                    "Use --autonomous for bounded scopes; interactive startup uses /sandbox/oma.",
+                    "Use --autonomous for bounded scopes; interactive startup uses the configured workspace.",
                 )
                 if args.action not in {"stop", "resume"}:
                     # A long session must not block Founder approval/refresh in another terminal.
@@ -1205,7 +1287,14 @@ def main():
                     not args.publish and not args.prompt_file,
                     "Publication and prompt files require --autonomous",
                 )
-                start(args.action, args.model, args.base_branch)
+                if args.action in {'stop', 'resume'}:
+                    require(not task_active(), 'Active session/task; lifecycle change refused')
+                    start(args.action, args.model, args.base_branch)
+                else:
+                    require(not (STATE / 'task.lock').is_symlink(), 'Symlink task lock')
+                    with (STATE / 'task.lock').open('a') as task_lock:
+                        fcntl.flock(task_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        start(args.action, args.model, args.base_branch, locked=True)
             elif args.command == "run":
                 require(args.prompt_file is not None, "run requires --prompt-file")
                 require(args.prompt_file.stat().st_size <= 32768, "Prompt file too large")
@@ -1215,7 +1304,8 @@ def main():
                 tests = ("/usr/bin/python3", "-m", "pytest", "-q")
                 if args.scope == "pilot":
                     tests += ("--import-mode=prepend",)
-                tests += tuple(args.test_path)
+                require(not args.test_path or set(args.test_path) <= set(PROFILE["test_paths"]), "Test paths exceed configured paths")
+                tests += tuple(args.test_path or PROFILE["test_paths"])
                 result = workflow.run(
                     sys.modules[__name__],
                     args.action,
@@ -1264,9 +1354,10 @@ def main():
                 )
                 rules(args.action, args.id)
             elif args.command == "cleanup":
+                require(not task_active(), "Active session/task; cleanup refused")
                 data = state()
                 print(
-                    "Export work first. Deletes only example-dev-phase2 and its guest credentials/data."
+                    "Export work first. Deletes only the configured project sandbox and its guest credentials/data."
                 )
                 confirm(NAME)
                 oshell("sandbox", "delete", NAME)
@@ -1276,11 +1367,11 @@ def main():
                 data = state()
                 effective(data["policy"])
                 if args.command == "refresh":
+                    require(not task_active(), "Active session/task; refresh refused")
                     names = workflow.scope_paths(sys.modules[__name__], args.scope, args.module)
                     refresh(data, names)
-                    data["writable"] = [p for p in names if p.rsplit("/", 1)[-1] != "AGENTS.md"]
-                    if args.scope == "pilot":
-                        data["writable"] = [p for p in names if p.endswith(".py")]
+                    import configuration
+                    data["writable"] = [p for p in names if p in configuration.paths(EDIT_SCOPE)]
                     save(STATE / "state.json", data)
                 else:
                     export_patch(data)

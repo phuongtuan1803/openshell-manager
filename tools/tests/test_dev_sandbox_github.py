@@ -217,7 +217,7 @@ def test_native_lint_duplicate_id_uses_temporary_id_only(native):
         value = yaml.safe_load(path.read_text())
         if path == HERE / "policies/github.yaml":
             return subprocess.CompletedProcess(args, 1, "already exists", "")
-        assert value["id"].startswith("oma-lint-")
+        assert value["id"].startswith("manager-lint-")
         value["id"] = provider.PROVIDER
         assert value == provider.profile(fake)
         return subprocess.CompletedProcess(args, 0, "", "")

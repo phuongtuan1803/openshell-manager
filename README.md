@@ -24,13 +24,11 @@ and invoke models; workflow publication can push and create draft PRs. They are
 not part of the offline checks. `verify.sh` without arguments invokes host readiness
 checks; the OMA-only `--reports` option now exits with an explanation.
 
-Public configuration contains example identities (`example/project`,
-`example-dev-phase2`, `example-github`) and a zero image digest placeholder, not
-an OMA deployment profile. These literals also replace corresponding source and
-test identities so exact repository, provider and resource matching stays intact.
-Keep the placeholders inert; PR2 must supply reviewed project/host configuration
-before using these scripts against a gateway. The source still contains OMA
-workspace paths, labels, locking conventions and scope assumptions.
+PR2 adds validated project profiles and isolated host state. Example profiles are
+inert: operational commands require `--project FILE` or `MANAGER_PROJECT`.
+See [configuration ownership, CLI migration and limitations](docs/migration/pr2-configuration.md)
+for the schema, per-project scope and safe migration procedure. Setup now requires
+Python/PyYAML prerequisites to be installed explicitly before profile validation.
 
 Pins are unchanged: OpenShell 0.1.2, Codex 0.162.1, Claude Code 2.1.296,
 OpenCode 1.19.0 and GitHub CLI 2.101.0. Upstream release checksums and the base
@@ -40,4 +38,4 @@ Codex's historical live gate is preserved in code; this import makes no new live
 verification claim. Claude and OpenCode remain disabled for live execution.
 
 See the [PR1 inventory, file mapping, security review and PR2 handoff](docs/migration/pr1-import-inventory.md).
-Telegram approval and the project-profile framework belong to later PRs.
+Telegram approval belongs to PR3; OMA integration and cutover belong to PR4.

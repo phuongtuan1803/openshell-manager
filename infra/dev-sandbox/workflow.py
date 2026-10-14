@@ -17,6 +17,18 @@ PROVIDER = "example-github"
 
 
 def scope_paths(control, scope="pilot", modules=()):
+    cfg = getattr(control, 'PROFILE', None)
+    if cfg:
+        if scope in {'pilot', 'full'}:
+            if modules:
+                raise ValueError('This scope does not accept modules')
+            return control.manifest()
+        if scope != 'module' or not modules:
+            raise ValueError('Module scope needs configured module names')
+        mapping = cfg.get('modules', {})
+        if any(m not in mapping for m in modules):
+            raise ValueError('Unknown configured module')
+        return list(dict.fromkeys(p for m in modules for p in mapping[m]))
     if scope == "pilot":
         if modules:
             raise ValueError("Pilot scope does not accept modules")
@@ -120,7 +132,10 @@ def publish(
 ):
     """Apply a validated patch to a real repository clone; never push snapshot history."""
     branch_name(branch)
-    if base != "main":
+    if getattr(control, "PROFILE", None):
+        if base != control.PROFILE["base_branch"]:
+            raise ValueError("Base branch drift")
+    elif base != "main":
         branch_name(base)
     if base == branch:
         raise ValueError("Publication head and base must differ")
@@ -160,7 +175,7 @@ def publish(
     control.execute(
         *git,
         "-c",
-        "user.name=OMA Sandbox",
+        "user.name=OpenShell Sandbox",
         "-c",
         "user.email=sandbox@example.invalid",
         "commit",
@@ -229,6 +244,8 @@ def publish(
 
 def run(control, name, *args, **kwargs):
     agents.require_live(name)
+    if (control.STATE / "task.lock").is_symlink():
+        raise ValueError("Symlink task lock")
     with (control.STATE / "task.lock").open("a") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -265,15 +282,22 @@ def _run(
         raise ValueError("Codex login required; run start.sh login")
     if branch:
         branch_name(branch)
-        if base != "main":
+        if getattr(control, "PROFILE", None):
+            if base != control.PROFILE["base_branch"]:
+                raise ValueError("Base branch drift")
+        elif base != "main":
             branch_name(base)
         if base == branch:
             raise ValueError("Publication head and base must differ")
         publication_preflight(control, data)  # Avoid paid work for a known blocked publication.
     paths = scope_paths(control, scope, modules)
     control.refresh(data, names=paths)
-    data["writable"] = [p for p in paths if p.rsplit("/", 1)[-1] != "AGENTS.md"]
-    if scope == "pilot":
+    if getattr(control, "PROFILE", None):
+        import configuration
+        data["writable"] = [p for p in paths if p in configuration.paths(control.EDIT_SCOPE)]
+    else:
+        data["writable"] = [p for p in paths if p.rsplit("/", 1)[-1] != "AGENTS.md"]
+    if scope == "pilot" and not getattr(control, "PROFILE", None):
         data["writable"] = [p for p in paths if p.endswith(".py")]
     control.save(control.STATE / "state.json", data)
     value, provenance = control.current(data)
@@ -351,7 +375,7 @@ def _run(
         control.execute(
             *git,
             "-c",
-            "user.name=OMA Sandbox",
+            "user.name=OpenShell Sandbox",
             "-c",
             "user.email=sandbox@example.invalid",
             "commit",
