@@ -2,9 +2,9 @@
 
 > **Trạng thái:** PROPOSAL / PLAN — chưa triển khai migration hay Telegram Approval.
 >
-> **Nguồn:** private repository \`phuongtuan1803/one-man-agency\`, nhánh \`main\`, commit tham chiếu \`f23b8926bf4adc663e5baca936c80a5844cec6ce\` (2026-10-14).
+> **Nguồn:** private repository `phuongtuan1803/one-man-agency`, nhánh `main`, commit tham chiếu `f23b8926bf4adc663e5baca936c80a5844cec6ce` (2026-10-14).
 >
-> **Đích:** public repository \`phuongtuan1803/openshell-manager\`.
+> **Đích:** public repository `phuongtuan1803/openshell-manager`.
 >
 > **Quy tắc:** Chỉ tài liệu này được thêm trong bước lập kế hoạch. Chưa chuyển source, chưa sửa OMA, chưa thay đổi Gateway/MicroVM/credentials/policy và chưa tạo PR triển khai.
 
@@ -24,20 +24,20 @@
 
 ## 2. Hiện trạng đã xác minh
 
-Trong OMA, triển khai nằm ở \`infra/dev-sandbox/\`:
-- \`control.py\`: entrypoint và orchestration, state, sandbox, rules, session.
-- \`bootstrap.py\`, \`setup.sh\`, \`start.sh\`, \`verify.sh\`, \`rules.sh\`: khởi tạo/vận hành.
-- \`agents.py\`: các adapter Codex, Claude Code, OpenCode; **chỉ Codex có live verification**.
-- \`guest.py\`, \`session.py\`: guest execution, checkout sync, khóa khi agent hoạt động.
-- \`workflow.py\`, \`github_provider.py\`, \`github.sh\`: scoped task, tests, GitHub provider và PR.
-- \`snapshot.py\`, \`export.sh\`, \`refresh.sh\`, \`validate*.py\`: source export, kiểm tra.
-- \`Dockerfile*\`, \`gateway.vm.example.toml\`, \`policy.yaml\`, \`policies/*\`, \`phase2.json\`, \`source-manifest.txt\`, \`edit-scope.txt\`: image, policy và cấu hình.
-- Test có trong \`tools/tests/test_dev_sandbox*.py\`.
-- Runbook nguồn: \`docs/src/runbooks/OpenShell Development Sandbox.report.json\` và các output dẫn xuất.
+Trong OMA, triển khai nằm ở `infra/dev-sandbox/`:
+- `control.py`: entrypoint và orchestration, state, sandbox, rules, session.
+- `bootstrap.py`, `setup.sh`, `start.sh`, `verify.sh`, `rules.sh`: khởi tạo/vận hành.
+- `agents.py`: các adapter Codex, Claude Code, OpenCode; **chỉ Codex có live verification**.
+- `guest.py`, `session.py`: guest execution, checkout sync, khóa khi agent hoạt động.
+- `workflow.py`, `github_provider.py`, `github.sh`: scoped task, tests, GitHub provider và PR.
+- `snapshot.py`, `export.sh`, `refresh.sh`, `validate*.py`: source export, kiểm tra.
+- `Dockerfile*`, `gateway.vm.example.toml`, `policy.yaml`, `policies/*`, `phase2.json`, `source-manifest.txt`, `edit-scope.txt`: image, policy và cấu hình.
+- Test có trong `tools/tests/test_dev_sandbox*.py`.
+- Runbook nguồn: `docs/src/runbooks/OpenShell Development Sandbox.report.json` và các output dẫn xuất.
 
-**Phụ thuộc OMA cần loại bỏ khỏi core:** các chuỗi \`oma-dev-phase2\`, \`oma-github\`, \`/sandbox/oma\`, đường dẫn \`.work/openshell-phase2\`, Git remote hardcoded, repo-relative test/scope paths, lệnh render runbook qua tooling riêng của OMA. Không chuyển các giả định này thành defaults chung.
+**Phụ thuộc OMA cần loại bỏ khỏi core:** các chuỗi `oma-dev-phase2`, `oma-github`, `/sandbox/oma`, đường dẫn `.work/openshell-phase2`, Git remote hardcoded, repo-relative test/scope paths, lệnh render runbook qua tooling riêng của OMA. Không chuyển các giả định này thành defaults chung.
 
-**Điểm quan trọng:** Phiên bản hiện được pin: OpenShell 0.1.2; Codex CLI 0.162.1. Hiện tại \`control.py\` dùng compatibility inbox phân tích structured TCP DENIED logs; đây **không** phải native proposal transport đầy đủ. Các trường method/path có thể không có. Phải xác minh lệnh/API native trên bản cài thực tế trước khi xây Telegram bridge.
+**Điểm quan trọng:** Phiên bản hiện được pin: OpenShell 0.1.2; Codex CLI 0.162.1. Hiện tại `control.py` dùng compatibility inbox phân tích structured TCP DENIED logs; đây **không** phải native proposal transport đầy đủ. Các trường method/path có thể không có. Phải xác minh lệnh/API native trên bản cài thực tế trước khi xây Telegram bridge.
 
 **Public/private boundary:** Manager là **public**, OMA là **private**. Không chép nguyên cây OMA, không chép history, bằng chứng có dữ liệu riêng, log, token, secrets, auth profile, payload hoặc toàn bộ runbook OMA một cách tự động. Mọi file code/config chuyển sang public phải được rà soát độc lập trước commit/push. Chỉ giữ ví dụ generic; OMA-specific values để trong OMA hoặc local host.
 
@@ -141,7 +141,7 @@ Linux host (không commit):
 ### PR1 — Hướng dẫn thực thi cho Codex
 
 1. Từ commit OMA đã pin, lập inventory file và import dependency graph; ghi rõ phần generic vs project-specific.
-2. Chỉ port source core, adapter, scripts và unit tests thực sự cần; không copy \`evidence/\`, \`*.evidence.json\`, \`.work/\`, generated reports hoặc secrets.
+2. Chỉ port source core, adapter, scripts và unit tests thực sự cần; không copy `evidence/`, `*.evidence.json`, `.work/`, generated reports hoặc secrets.
 3. Tất cả config/profile công khai chỉ chứa placeholder hoặc dữ liệu generic. Không commit nội dung private OMA chưa review.
 4. Giữ entrypoint hiện tại tương đương (setup/start/verify, rules và export) trước khi refactor cấu trúc sâu.
 5. Test offline/mocked trước, không tạo sandbox/đổi policy/cài dependencies trên host chỉ để chạy thử.
@@ -151,7 +151,7 @@ Linux host (không commit):
 
 ### PR2 — Điều kiện decoupling
 
-- Không còn \`REPO=HERE.parent.parent\`, \`NAME=oma-dev-phase2\`, path \`/sandbox/oma\` hoặc \`REPOSITORY=phuongtuan1803/one-man-agency\` trong core generic.
+- Không còn `REPO=HERE.parent.parent`, `NAME=oma-dev-phase2`, path `/sandbox/oma` hoặc `REPOSITORY=phuongtuan1803/one-man-agency` trong core generic.
 - Tên sandbox hợp lệ theo giới hạn native CLI; không tự đổi sandbox đang tồn tại.
 - Git checkout sync chỉ fast-forward khi an toàn; dirty/diverged/worktree active phải skip với lý do, không ghi đè.
 - Các quyền GitHub fetch/push/PR do project provider profile giới hạn; không cho push main/merge/force-push theo mặc định.
@@ -194,7 +194,7 @@ flowchart LR
 - CI của Manager kiểm thử core + security; CI OMA chỉ kiểm tra integration/pin theo phạm vi nhỏ.
 - Verify rằng không file public mới nào chứa OMA credentials, snapshot private, raw logs, personal data hoặc secret material.
 
-**Rollback:** Giữ \`infra/dev-sandbox/\` cũ trong OMA tới khi PR4 acceptance pass; ghi rõ previous pinned commit và lệnh chạy cũ. Không xóa local state hoặc credential store. Nếu test/behavior không tương đương, revert OMA integration về launcher cũ, không cố tự sửa policy.
+**Rollback:** Giữ `infra/dev-sandbox/` cũ trong OMA tới khi PR4 acceptance pass; ghi rõ previous pinned commit và lệnh chạy cũ. Không xóa local state hoặc credential store. Nếu test/behavior không tương đương, revert OMA integration về launcher cũ, không cố tự sửa policy.
 
 **Dừng để Founder quyết định khi:** (1) cần public hóa code/config private, (2) cần thay đổi effective sandbox/network permissions, (3) cần host credential/token mới, (4) cần xóa/tái tạo sandbox hoặc migrate state, (5) phát hiện native API không đáp ứng contract, (6) thay đổi out-of-scope.
 
