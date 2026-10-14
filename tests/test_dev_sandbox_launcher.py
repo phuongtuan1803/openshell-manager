@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 spec = importlib.util.spec_from_file_location(
-    "sandbox_validation", Path(__file__).resolve().parents[2] / "infra/dev-sandbox/validate.py"
+    "sandbox_validation", Path(__file__).resolve().parents[1] / "src/openshell_manager/validate.py"
 )
 launcher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launcher)

@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
-SANDBOX = ROOT / "infra/dev-sandbox"
+ROOT = Path(__file__).resolve().parents[1]
+SANDBOX = ROOT / "src/openshell_manager"
 spec = importlib.util.spec_from_file_location("sandbox_snapshot", SANDBOX / "snapshot.py")
 snapshot = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(snapshot)
@@ -82,7 +82,7 @@ def test_snapshot_exports_committed_blobs_only(tmp_path):
 
 
 def test_gateway_template_selects_vm_and_valid_default():
-    settings = tomllib.loads((SANDBOX / "gateway.vm.example.toml").read_text())["openshell"]
+    settings = tomllib.loads((ROOT / "config/gateway.vm.example.toml").read_text())["openshell"]
     assert settings["version"] == 2
     assert settings["gateway"]["compute_driver"] == "vm"
     assert settings["gateway"]["bind_address"].startswith("127.0.0.1:")

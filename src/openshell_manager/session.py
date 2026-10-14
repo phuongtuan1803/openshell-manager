@@ -23,7 +23,7 @@ SSH_REMOTES = {
 }
 ROOT = Path("/sandbox/project/checkout")
 LOCK = Path("/sandbox/.manager-source.lock")
-AUTH_FIX = "Run ./infra/dev-sandbox/github.sh credential in a private host terminal, then setup.sh."
+AUTH_FIX = "Run ./scripts/github.sh credential in a private host terminal, then setup.sh."
 CREDENTIAL_SCRIPT = """import os,sys
 if sys.argv[-1] != 'get': sys.exit(0)
 fields = dict(line.rstrip('\\n').split('=',1) for line in sys.stdin if '=' in line)

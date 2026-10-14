@@ -6,7 +6,7 @@ from pathlib import Path
 
 import snapshot
 
-DEFAULTS = Path(__file__).resolve().parent / 'phase2.json'
+DEFAULTS = Path(__file__).resolve().parents[2] / 'config/defaults/phase2.json'
 
 
 def require(ok, message):
@@ -133,7 +133,7 @@ def verify_checkout(cfg):
 def provider_profile(cfg):
     """Generate only the established exact repository endpoint template."""
     import yaml
-    template = yaml.safe_load((DEFAULTS.parent / 'policies/github.yaml').read_text())
+    template = yaml.safe_load((DEFAULTS.parent.parent / 'policies/github.yaml').read_text())
     template['id'] = cfg['github']['provider']
     template['display_name'] = cfg['id'] + ' GitHub'
     template['description'] = 'Scoped Git and draft PR operations; no merge endpoint'

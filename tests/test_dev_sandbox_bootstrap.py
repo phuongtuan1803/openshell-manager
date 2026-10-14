@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-HERE = Path(__file__).resolve().parents[2] / "infra/dev-sandbox"
+HERE = Path(__file__).resolve().parents[1] / "src/openshell_manager"
 sys.path.insert(0, str(HERE))
 bootstrap = importlib.import_module("bootstrap")
 control = importlib.import_module("control")
@@ -53,7 +53,7 @@ def test_healthy_gateway_reused_without_restart_or_sudo(host):
     fake, calls, _, config = host
     cfg = config / "openshell/gateway.toml"
     cfg.parent.mkdir(parents=True)
-    cfg.write_text((HERE / "gateway.vm.example.toml").read_text())
+    cfg.write_text((HERE.parents[1] / "config/gateway.vm.example.toml").read_text())
     tls = cfg.parent / "existing-tls"
     tls.write_text("DUMMY_TLS_MARKER")
     before = cfg.read_bytes()

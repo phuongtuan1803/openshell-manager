@@ -1,3 +1,5 @@
+> **Layout update:** After extraction, current commands live under `scripts/`, Python sources under `src/openshell_manager/`, Manager configuration under `config/`, Docker recipes under `docker/`, and tests under `tests/`. The historical PR2 notes below describe the original layout.
+
 # PR2 configuration and CLI migration
 
 PR2 retains `infra/dev-sandbox/` and the existing shell entrypoints. No OMA
@@ -76,10 +78,10 @@ not mutate Gateway/VM resources. Choose a private state root owned by the operat
 ```bash
 export MANAGER_PROJECT=/absolute/path/to/project/project.json
 export MANAGER_HOST=/absolute/path/to/private/host.json  # optional
-./infra/dev-sandbox/setup.sh --dry-run
-./infra/dev-sandbox/verify.sh
-./infra/dev-sandbox/start.sh codex
-./infra/dev-sandbox/refresh.sh --scope module --module src
+./scripts/setup.sh --dry-run
+./scripts/verify.sh
+./scripts/start.sh codex
+./scripts/refresh.sh --scope module --module src
 ```
 
 Alternatively pass `--project FILE --host FILE` to wrappers or `control.py`.

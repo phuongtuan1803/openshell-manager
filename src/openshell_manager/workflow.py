@@ -113,13 +113,13 @@ def prepare(control, name, mode="apply", model=None, auth_mode="api"):
         "model": model,
         "status": agents.UNVERIFIED,
         "installation": agent.install(),
-        "image_recipe": "infra/dev-sandbox/Dockerfile.agent",
+        "image_recipe": "docker/Dockerfile.agent",
         "build_args": {"AGENT_PACKAGE": agent.package, "AGENT_VERSION": agent.version},
         "authentication": agent.auth_configuration(auth_mode),
         "environment": agent.environment(),
         "interactive": agent.interactive(model=model),
         "autonomous": agent.autonomous("OFFLINE COMMAND CHECK ONLY", model=model),
-        "policy_template": f"infra/dev-sandbox/policies/{name}.json",
+        "policy_template": f"config/policies/{name}.json",
         "github_provider": PROVIDER,
         "network_applied": False,
         "cli_installed": False,
@@ -127,7 +127,7 @@ def prepare(control, name, mode="apply", model=None, auth_mode="api"):
     }
     if name == "opencode":
         provider = model.split("/", 1)[0]
-        templates = control.read(control.HERE / "policies/opencode.json")["providers"]
+        templates = control.read(control.PROJECT_ROOT / "config/policies/opencode.json")["providers"]
         if provider not in templates:
             raise ValueError("Selected provider needs a reviewed endpoint template in a PR")
         plan["provider"] = provider

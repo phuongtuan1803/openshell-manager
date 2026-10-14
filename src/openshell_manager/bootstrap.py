@@ -12,7 +12,7 @@ import tomllib
 import urllib.request
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parents[2] / "config"
 DEB_URL = "https://github.com/NVIDIA/OpenShell/releases/download/v0.1.2/openshell_0.1.2-1_amd64.deb"
 DEB_SHA = "1f5416ea08f32fdc621f20a2cc0324298e60aba8bbe996459d9e3b44195f23df"
 GH_URL = "https://github.com/cli/cli/releases/download/v2.101.0/gh_2.101.0_linux_amd64.tar.gz"

@@ -5,6 +5,6 @@ agent="${1:-codex}"
 if (($#)); then shift; fi
 if [[ "${1:-}" == --autonomous ]]; then
   shift
-  exec python3 "$ROOT/control.py" run "$agent" "$@"
+  exec python3 "$ROOT/../src/openshell_manager/control.py" run "$agent" "$@"
 fi
-exec python3 "$ROOT/control.py" start "$agent" "$@"
+exec python3 "$ROOT/../src/openshell_manager/control.py" start "$agent" "$@"

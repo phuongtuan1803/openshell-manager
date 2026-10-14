@@ -16,4 +16,4 @@ done
 # Configuration must be validated before any bootstrap/installation operation.
 command -v python3 >/dev/null || { echo 'Python 3.11+ required; install explicitly.' >&2; exit 1; }
 python3 -c 'import tomllib' || { echo 'Python 3.11+ required to validate configuration; install explicitly.' >&2; exit 1; }
-exec python3 "$ROOT/control.py" setup "$action" "${args[@]}"
+exec python3 "$ROOT/../src/openshell_manager/control.py" setup "$action" "${args[@]}"

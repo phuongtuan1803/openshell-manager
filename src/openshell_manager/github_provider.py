@@ -22,7 +22,7 @@ PERMISSIONS = (
     "GitHub credential cannot perform this operation. Grant the existing credential "
     "Contents: read/write and Pull requests: read/write for "
     + REPOSITORY
-    + " only. If replacement is necessary, run ./infra/dev-sandbox/github.sh credential "
+    + " only. If replacement is necessary, run ./scripts/github.sh credential "
     "in a private host terminal, then rerun setup.sh. No credential was replaced."
 )
 
@@ -30,7 +30,7 @@ PERMISSIONS = (
 def profile(control):
     import yaml
 
-    return yaml.safe_load(getattr(control, "PROVIDER_PROFILE", control.HERE / "policies/github.yaml").read_text())
+    return yaml.safe_load(getattr(control, "PROVIDER_PROFILE", Path(__file__).resolve().parents[2] / "config/policies/github.yaml").read_text())
 
 
 def lint(control, path):
@@ -192,7 +192,7 @@ def permissions(control):
     if result.returncode and ("HTTP 401" in result.stderr or "Bad credentials" in result.stdout):
         raise ValueError(
             "GitHub rejected the existing credential (HTTP 401). Run "
-            "./infra/dev-sandbox/github.sh credential to explicitly refresh it, "
+            "./scripts/github.sh credential to explicitly refresh it, "
             "then rerun setup.sh. No credential was replaced."
         )
     control.require(result.returncode == 0, PERMISSIONS)
@@ -283,7 +283,7 @@ def verify(control, data):
 
 
 def reconcile(control, data, mode="apply"):
-    path = getattr(control, "PROVIDER_PROFILE", control.HERE / "policies/github.yaml")
+    path = getattr(control, "PROVIDER_PROFILE", Path(__file__).resolve().parents[2] / "config/policies/github.yaml")
     lint(control, path)
     wanted = profile(control)
     profiles = control.api("provider", "profile", "list")

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-HERE = Path(__file__).resolve().parents[2] / "infra/dev-sandbox"
+HERE = Path(__file__).resolve().parents[1] / "src/openshell_manager"
 spec = importlib.util.spec_from_file_location("oma_session", HERE / "session.py")
 session = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(session)
