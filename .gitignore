@@ -1,0 +1,10 @@
+/.migration-reference/
+/.work/
+/.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.evidence.json
+/evidence/
+.env
+.env.*

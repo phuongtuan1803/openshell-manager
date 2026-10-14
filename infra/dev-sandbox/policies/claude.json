@@ -1,0 +1,37 @@
+{
+  "agent": "claude",
+  "status": "OFFLINE TEMPLATE \u2014 NOT APPLIED",
+  "default_deny": true,
+  "manual_approval": true,
+  "binaries": [
+    "/usr/local/bin/claude"
+  ],
+  "executable_identity": "Candidate launcher only; resolve native interpreter/executable and checksum before live admission",
+  "providers": {
+    "anthropic": {
+      "endpoints": [
+        {
+          "host": "api.anthropic.com",
+          "port": 443,
+          "protocol": "rest",
+          "enforcement": "enforce",
+          "rules": [
+            {
+              "allow": {
+                "method": "POST",
+                "path": "/v1/messages"
+              }
+            },
+            {
+              "allow": {
+                "method": "POST",
+                "path": "/v1/messages/count_tokens"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "review": "Template review only. No automatic attachment or endpoint approval. Telemetry and discovery hosts remain denied. Each selected provider requires separate Founder approval."
+}
