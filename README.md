@@ -64,3 +64,10 @@ pins remain OpenShell 0.1.2, Codex 0.162.1, Claude Code 2.1.296, OpenCode
 See [migration notes](docs/migration/pr2-configuration.md) and the
 [extraction/Telegram plan](docs/plans/openshell-extraction-and-telegram-approval.md).
 Telegram Approval is a later implementation step, not part of this reorganization.
+
+Telegram Approval P1 provides host-side **notification/manual-review mode**.
+Native Telegram approve/reject remains disabled until OpenShell 0.1.2 exact
+structured proposal identity/scope can be verified. See the
+[operator runbook](docs/runbooks/telegram-approval-p1.md) and
+[acceptance report](docs/pr3b-acceptance.md). Package installation never starts
+or enables the optional user service.
