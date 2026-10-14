@@ -2,6 +2,7 @@
 # Host acceptance without inference, publication, resource replacement or credential output.
 set -euo pipefail
 ROOT="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export PYTHONPATH="$ROOT/../src${PYTHONPATH:+:$PYTHONPATH}"
 case "${1:-}" in
   '') exec "$ROOT/setup.sh" --check ;;
   --reports)

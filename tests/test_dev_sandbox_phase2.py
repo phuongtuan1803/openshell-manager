@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 
 HERE = Path(__file__).resolve().parents[1] / "src/openshell_manager"
-sys.path.insert(0, str(HERE))
-spec = importlib.util.spec_from_file_location("phase2_control", HERE / "control.py")
+sys.path.insert(0, str(HERE.parent))
+spec = importlib.util.spec_from_file_location("openshell_manager.phase2_control", HERE / "control.py")
 control = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = control
 spec.loader.exec_module(control)
@@ -20,6 +20,15 @@ guest_spec = importlib.util.spec_from_file_location("phase2_guest", HERE / "gues
 guest = importlib.util.module_from_spec(guest_spec)
 guest_spec.loader.exec_module(guest)
 sys.path.pop(0)
+
+
+@pytest.fixture(autouse=True)
+def legacy_project_scopes(monkeypatch):
+    # These pre-profile core tests bypass configure. Scope fixtures belong to tests,
+    # never to an installed Manager's default source tree.
+    fixtures = HERE.parents[1] / 'tests/fixtures/legacy'
+    monkeypatch.setattr(control, 'SOURCE_MANIFEST', fixtures / 'source-manifest.txt')
+    monkeypatch.setattr(control, 'EDIT_SCOPE', fixtures / 'edit-scope.txt')
 
 
 def encoded(value):

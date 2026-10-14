@@ -12,7 +12,9 @@ import tomllib
 import urllib.request
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parents[2] / "config"
+from .assets import RESOURCES
+
+HERE = RESOURCES / "config"
 DEB_URL = "https://github.com/NVIDIA/OpenShell/releases/download/v0.1.2/openshell_0.1.2-1_amd64.deb"
 DEB_SHA = "1f5416ea08f32fdc621f20a2cc0324298e60aba8bbe996459d9e3b44195f23df"
 GH_URL = "https://github.com/cli/cli/releases/download/v2.101.0/gh_2.101.0_linux_amd64.tar.gz"
@@ -54,23 +56,13 @@ def exclusive_file(path, content):
 
 
 def yaml_module(run, install=False):
-    """Provision the existing dependency only after the caller validates the profile."""
+    """Use the package interpreter dependency; never install a system Python module."""
     try:
         return importlib.import_module('yaml')
     except ModuleNotFoundError as exc:
         if exc.name != 'yaml':
             raise
-    if not install:
-        raise ValueError('PyYAML missing; run setup.sh with a valid profile to install it')
-    if platform.system() != 'Linux' or platform.machine() != 'x86_64' or not Path('/etc/debian_version').exists():
-        raise ValueError('Install PyYAML explicitly on this unsupported bootstrap host')
-    run(['sudo', 'apt-get', 'update'], interactive=True, timeout=600)
-    run(['sudo', 'apt-get', 'install', '-y', 'python3-yaml'], interactive=True, timeout=1200)
-    importlib.invalidate_caches()
-    try:
-        return importlib.import_module('yaml')
-    except ModuleNotFoundError:
-        raise ValueError('PyYAML is unavailable to this Python; use the system Python or install it explicitly') from None
+        raise ValueError('PyYAML missing; reinstall the pinned Manager with uv tool install --reinstall') from None
 
 
 def host(control):
@@ -83,7 +75,7 @@ def host(control):
     run = control.command
     required = {"git": "git", "curl": "curl", "docker": "docker.io"}
     packages = [package for binary, package in required.items() if not shutil.which(binary)]
-    # configure provisions PyYAML only after profile and checkout validation.
+    # PyYAML belongs to the Manager package environment.
     if packages:
         run(["sudo", "apt-get", "update"], interactive=True, timeout=600)
         run(

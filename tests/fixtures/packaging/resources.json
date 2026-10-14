@@ -1,0 +1,14 @@
+{
+  "config/defaults/phase2.json": "73ae13e235eb04ec7b080cc1c1f2b37e593a2c2f66ee6dba2247b5863d9a76db",
+  "config/gateway.vm.example.toml": "3164b2885cdb9a5ae4cae1da22f8f590d5ba52b7da3275d85ccfd96eb85f62d3",
+  "config/policies/claude.json": "dab1cd89256a787cc93a3af58139202b5d860be2aa703cfaa69759e8770a6315",
+  "config/policies/github.yaml": "43ae042513cac572eed6144dd518d1fdc9ce3427117ae1231c0d1aa007eda21c",
+  "config/policies/opencode.json": "eaf85f4c72ff5de8015daeffaca56815faa0d6941b721525ba17fc3ac070c5e0",
+  "config/policies/validation.yaml": "87aa57b9f878b4f7e4d5a754e38dbb08a57eb0339414c5c2cbca6786d025fc27",
+  "docker/.dockerignore": "08bb7a70af4ae5a9c15226f499f2e76055ebd521550f87eb102a1316cdb9df38",
+  "docker/Dockerfile": "80cec3fffa1f7e208e8468a57bf177f51a896bca2b07aeef6d05265e08ae03fc",
+  "docker/Dockerfile.agent": "cb543f7a942e65b6003dec254edd24381d4bf03d2f32518d1a3d6bd9037d7ece",
+  "src/openshell_manager/guest.py": "6611a8c35f310b3695479d02690ca807d30ee66aacbe689820eaaa4900cff00a",
+  "src/openshell_manager/session.py": "23f4e728c321631f2ec4835574fb2734946d77f779d2c28c93c1135c3c6161ce",
+  "src/openshell_manager/validate_guest.py": "53f25ab01bfaf360f3b328052e77328bd14abc964320bb928fb1cc76c062872b"
+}

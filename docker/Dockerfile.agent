@@ -1,11 +1,1 @@
-# Offline adapters use a separate image; preserve the live Codex image/evidence.
-# setup tags the verified local image by its configuration digest prefix.
-FROM example-dev-phase2:000000000000
-ARG AGENT_PACKAGE=@anthropic-ai/claude-code
-ARG AGENT_VERSION=2.1.296
-USER root
-# Packages may require their platform installer. Runs only during an explicit build.
-RUN npm install --global "${AGENT_PACKAGE}@${AGENT_VERSION}" \
-    && rm -rf /root/.npm
-USER 1000:1000
-WORKDIR /sandbox
+../src/openshell_manager/resources/docker/Dockerfile.agent

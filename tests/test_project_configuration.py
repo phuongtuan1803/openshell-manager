@@ -9,16 +9,24 @@ from types import SimpleNamespace
 import pytest
 
 HERE = Path(__file__).resolve().parents[1] / 'src/openshell_manager'
-sys.path.insert(0, str(HERE))
-import configuration
-import workflow
+sys.path.insert(0, str(HERE.parent))
+from openshell_manager import configuration
+from openshell_manager import workflow
 
 
 def controller():
-    spec = importlib.util.spec_from_file_location('project_controller', HERE / 'control.py')
+    spec = importlib.util.spec_from_file_location('openshell_manager.project_controller', HERE / 'control.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.fixture(autouse=True)
+def verified_manager_fixture(monkeypatch):
+    # These inherited core tests isolate profile/state behavior. Real provenance is
+    # exercised separately, without this fixture, in test_provenance.py.
+    from openshell_manager import provenance
+    monkeypatch.setattr(provenance, 'identity', lambda: ('b' * 40, 'installed Git'))
 
 
 @pytest.fixture
@@ -169,7 +177,7 @@ def test_existing_unbound_sandbox_not_adopted(monkeypatch, tmp_path):
 def test_manager_pin_mismatch(profile, monkeypatch):
     path, host, _ = profile()
     c = controller()
-    monkeypatch.setattr(c, 'command', lambda *a, **k: SimpleNamespace(stdout='c' * 40))
+    monkeypatch.setattr(c.provenance, 'identity', lambda: ('c' * 40, 'installed Git'))
     with pytest.raises(ValueError, match='revision mismatch'):
         c.configure(path, host)
     assert not (host.parent / 'state').exists()
@@ -242,7 +250,7 @@ def test_empty_writable_scope_does_not_expand():
 @pytest.mark.parametrize('oma', [False, True])
 def test_project_export_and_patch_boundaries(profile, tmp_path, oma):
     import base64
-    import snapshot
+    from openshell_manager import snapshot
     path, host, _ = profile('synthetic-oma' if oma else 'generic', oma)
     cfg = configuration.load(path, host)
     root = Path(cfg['root'])
@@ -377,7 +385,7 @@ def test_profiled_workflow_defaults_choose_module_tests_before_native():
 
 
 @pytest.mark.parametrize('install', [False, True])
-def test_validated_setup_can_provision_yaml_without_extra_command(profile, monkeypatch, install):
+def test_validated_setup_never_installs_system_yaml(profile, monkeypatch, install):
     import yaml
     path, host, _ = profile()
     c = controller()
@@ -399,15 +407,10 @@ def test_validated_setup_can_provision_yaml_without_extra_command(profile, monke
     monkeypatch.setattr(c.bootstrap.importlib, 'import_module', import_yaml)
     monkeypatch.setattr(c.bootstrap.platform, 'system', lambda: 'Linux')
     monkeypatch.setattr(c.bootstrap.platform, 'machine', lambda: 'x86_64')
-    if install:
-        c.configure(path, host, install_dependencies=True)
-        assert [argv for argv in calls if argv[0] == 'sudo'] == [
-            ['sudo', 'apt-get', 'update'], ['sudo', 'apt-get', 'install', '-y', 'python3-yaml']]
-        assert c.PROVIDER_PROFILE.is_file()
-    else:
-        with pytest.raises(ValueError, match='PyYAML missing'):
-            c.configure(path, host)
-        assert not any(argv[0] == 'sudo' for argv in calls)
+    with pytest.raises(ValueError, match='PyYAML missing'):
+        c.configure(path, host, install_dependencies=install)
+    assert not any(argv[0] == 'sudo' for argv in calls)
+
 
 
 def test_invalid_base_override_cannot_bootstrap_dependencies(profile, monkeypatch):

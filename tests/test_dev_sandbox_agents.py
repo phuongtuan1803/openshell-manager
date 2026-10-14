@@ -11,11 +11,11 @@ from types import SimpleNamespace
 import pytest
 
 HERE = Path(__file__).resolve().parents[1] / "src/openshell_manager"
-sys.path.insert(0, str(HERE))
-workflow = importlib.import_module("workflow")
-agents = importlib.import_module("agents")
+sys.path.insert(0, str(HERE.parent))
+workflow = importlib.import_module("openshell_manager.workflow")
+agents = importlib.import_module("openshell_manager.agents")
 
-spec = importlib.util.spec_from_file_location("multi_control", HERE / "control.py")
+spec = importlib.util.spec_from_file_location("openshell_manager.multi_control", HERE / "control.py")
 control = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = control
 spec.loader.exec_module(control)
