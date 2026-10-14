@@ -30,7 +30,7 @@ def notice(store):
 @pytest.mark.parametrize('operation,args', [('discover', ()), ('get', ('fixture-dev', 'chunk')),
                                             ('approve', ('fixture-dev', 'chunk')), ('reject', ('fixture-dev', 'chunk'))])
 def test_native_gate_has_no_subprocess(operation, args):
-    with pytest.raises(native.NativeUnavailable, match='disabled'):
+    with pytest.raises(native.NativeUnavailable):
         getattr(native.NativeAdapter(), operation)(*args)
 
 

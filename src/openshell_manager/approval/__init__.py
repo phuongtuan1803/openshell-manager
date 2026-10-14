@@ -1,1 +1,1 @@
-"""Host-only, manual-review Telegram notifications; no native permission grants."""
+"""Host-only Telegram review of exact native network-rule proposals."""

@@ -2,8 +2,8 @@
 
 Manager requires Python 3.11+ and uv. Native operations still require the supported
 Linux host and reviewed external OpenShell/Gateway/Docker tooling. Installation
-alone never starts services or provisions a sandbox. There is no Telegram code in
-this package.
+alone never starts services or provisions a sandbox. The host-side Telegram bridge is included but starts only through explicit
+operator action; see [the first real-run procedure](runbooks/telegram-approval-live.md).
 
 Use a Founder-reviewed **full 40-character commit SHA**, replacing the placeholder:
 
@@ -68,16 +68,16 @@ missing installed provenance to an unrelated Git directory.
 
 ## Dependencies and development
 
-PyYAML 6.0.3 is the only runtime Python dependency and is resolved inside uv's tool
+Runtime Python dependencies are PyYAML 6.0.3, grpcio 1.76.0 and protobuf 6.33.6; gRPC/protobuf support the version-specific host approval adapter. These are resolved inside uv's tool
 environment. Manager never installs `python3-yaml` with apt. Inspect actual installed
 dependencies with `uv tool list` and the tool environment's interpreter:
 
 ```bash
-"$(uv tool dir)/openshell-manager/bin/python" -c 'import importlib.metadata as m; print(m.version("PyYAML"))'
+"$(uv tool dir)/openshell-manager/bin/python" -c 'import importlib.metadata as m; print({name: m.version(name) for name in ("PyYAML", "grpcio", "protobuf")})'
 ```
 
 `uv.lock` locks repository development dependencies. **It does not lock a Git-based
-`uv tool install`.** Runtime PyYAML has an explicit exact constraint in
+`uv tool install`.** Each direct runtime dependency has an explicit exact constraint in
 `pyproject.toml`; inspect the resolved environment after installation. The pinned
 build backend has its own build requirements. Existing OpenShell, agent and gh pins
 are unchanged; native apply-mode bootstrapping retains its prior behavior.
@@ -94,9 +94,9 @@ uv run --locked python -m pytest -q
 uv run --locked python tools/verify_packaging.py
 ```
 
-The last command is a separate offline integration harness. Pre-cache PyYAML 6.0.3
+The last command is a separate offline integration harness. Pre-cache PyYAML 6.0.3, grpcio 1.76.0, protobuf 6.33.6
 and hatchling 1.27.0 plus its build dependencies (for example, `uv pip install --target
-/tmp/manager-build-deps PyYAML==6.0.3 hatchling==1.27.0` using the same `UV_CACHE_DIR`).
+/tmp/manager-build-deps PyYAML==6.0.3 grpcio==1.76.0 protobuf==6.33.6 hatchling==1.27.0` using the same `UV_CACHE_DIR`).
 It inspects both archives, verifies reviewed resource hashes, installs a full-SHA
 local Git fixture through uv in private temporary HOME/tool directories, hides the
 fixture checkout, and exercises the installed executable with native-tool

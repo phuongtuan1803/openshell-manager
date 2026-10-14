@@ -1,92 +1,120 @@
-# PR3b acceptance: notification/manual-review fallback
+# PR3b acceptance: native Telegram approval correction
 
-Branch: `feat/pr3b-telegram-approval-p1`, based on fetched main `ccc9548`.
-Main contains PR3a merge #4 and architecture merge #3. Section 4 of
-[the design](plans/pr3a-uv-packaging-and-pr3b-telegram-approval-design.md)
-is the implementation contract. This release is the explicitly permitted
-fallback, **not complete remote native approval acceptance**.
+Branch: `feat/pr3b-telegram-approval-p1`; correction follows `c981873`.
+Contract: Section 4 and B01–B15 of
+[the design](plans/pr3a-uv-packaging-and-pr3b-telegram-approval-design.md).
+The earlier notification-only implementation was insufficient for the requested
+workflow. This correction implements automatic native discovery and real native
+approval/rejection through the version-specific authenticated Gateway API.
 
-## Mandatory native gate / blocker
+**Status: offline implementation verified; live end-to-end acceptance SKIP.**
+No service was deployed or enabled. No real Telegram/native credential, Gateway,
+active sandbox or paid agent/model call was accessed. Runtime missing/untrusted
+native evidence reports **BLOCKED — end-to-end approval unavailable**, not success.
 
-The pinned [OpenShell v0.1.2 CLI source](https://github.com/NVIDIA/OpenShell/blob/v0.1.2/crates/openshell-cli/src/main.rs)
-shows `DraftCommands::Get` accepts sandbox name/status only (lines 1836–1847).
-There is no structured-output or exact-chunk selector on that command. The
-[0.1.2 advisor documentation](https://docs.nvidia.com/openshell/v0.1.2/how-it-works/policies/advisor)
-documents manual get/approve/reject but does not establish a reliable host-side
-structured exact-proposal/freshness/result contract. These sources were inspected;
-no installed CLI, active Gateway, sandbox, Telegram or guest service was probed.
+## Resolved source/API investigation
 
-Native discovery/get/approve/reject all raise `NativeUnavailable` before any
-subprocess or network call. No user flag enables native writes. No invented
-structured schema, synthetic chunk identity or log-derived authorization exists.
-No Approve rule/Reject buttons are offered while the gate is blocked; only an
-expiring authenticated Details callback. Native successful approve/reject tests
-cannot be represented honestly by inventing a mock contract. They remain SKIP.
+Public OpenShell v0.1.2 tag resolves to immutable commit
+`6648bd0c290efbc41ba131ee9831ee45cd431f94` (read-only `git ls-remote` evidence).
+Pinned source was downloaded to a disposable directory. The CLI's human-readable
+output is not used as authority. Native Gateway `GetDraftPolicy` supplies exact
+chunk IDs, complete rule scope, creation identity, risk fields, current/candidate
+effective policies/hashes and a review token. Supported approval verifies that
+token and fences persistence against changed effective policy. Native rejection
+addresses the exact chunk and records a reason.
 
-## Criteria
+The bridge uses `ApproveAllDraftChunks` with exactly **one explicit pending
+chunk/token pair**, never an empty list. This avoids the single-chunk approval
+RPC's ability to reapprove rejected chunks. No blanket approval, generic policy
+update, auto mode or permanent project-policy persistence exists here.
 
-PASS below means offline fallback behavior only where stated. It does not
-establish native host acceptance or permission grant capability.
+[Exact immutable source references, schema hashes, auth/decision behavior and
+race limits](native-api-v0.1.2.md) are recorded separately. Real gRPC/protobuf
+serialization is exercised by synthetic versioned fixtures. There is no invented
+JSON endpoint, hand-parsed terminal output or log-derived native identity.
 
-| ID | Status | Evidence and limitation |
+## B01–B15
+
+PASS entries below are **offline source/fixture evidence**, not host/live proof.
+
+| ID | Status | Actual evidence and limits |
 | --- | --- | --- |
-| B01 | FAIL | Native structured exact-proposal contract not positively identified. Pinned source evidence above; four native adapter refusal cases pass. Mandatory review-only mode enforced. |
-| B02 | SKIP | Native get/list/approve/reject unavailable behind gate; no write command emitted. Command correctness/scope approval acceptance blocked by B01. |
-| B03 | PASS | No settings/policy/pin changes, native commands or global auto approval added. Adapter unconditionally refuses writes; existing guards/resources retained. |
-| B04 | PASS | Fallback only: repeated inbox scans send one bounded sanitized endpoint/risk notice, with default 900-second TTL. Free-form reasons/paths/native IDs omitted, unchanged inbox bytes asserted. Native proposal delivery unavailable. |
-| B05 | PASS | Wrong numeric user/chat, string IDs, bool IDs, message mismatch and forged callbacks refused. Unauthorized callbacks do not consume valid tokens. No callback path invokes native mutation. |
-| B06 | PASS | SQLite atomic concurrent claims/callbacks, hashed opaque tokens, expiry boundary, duplicate fingerprints, replayed callback/update and durable offset tests. Token bound to Details and Telegram message; it grants no permission. |
-| B07 | SKIP | Project/bot journal binding and changed config fields are refused before polling; removed/changed inbox notices become stale. Native sandbox UUID, rule/provider/effective-policy fingerprint verification blocked by B01. |
-| B08 | SKIP | Verified native successful approve/reject/refusal/result tests blocked by B01. No claim of native state confirmation. All native methods refuse. |
-| B09 | PASS | Injected send/answer failure and recovery: no native action; uncertain delivery held for review without resending; new endpoints still delivered after outage; offset replay safe. Explicit missing-bot configuration fails before Telegram. |
-| B10 | PASS | Restart reconciliation turns sending and legacy applying rows into needs_review, records sanitized audit, never retries native action or uncertain send. Native result reconciliation unavailable; conservative manual-review outcome used. |
-| B11 | PASS | Inbox read-only; forged native chunk/method/path/reason ignored; invalid scope/binary/port/markup rejected. Compatibility path has no approval capability and no native CLI calls. |
-| B12 | PASS | Private host JSON loader enforces ownership/0600/no links, numeric IDs and token format. Telegram errors suppress token-bearing exceptions; payload tests exclude token. Directory/DB 0700/0600 and symlink/hardlink refusal tested. Archive disclosure scan required below. No real credential created/read. |
-| B13 | PASS | Host-wide flock excludes second poller sharing canonical state root; cooperative private stop marker, orderly signal restoration/DB closure and drift-before-poll tests. Reviewed optional systemd template, explicit enable/disable runbook. Package/setup never enables service. One canonical host state root is a P1 precondition. |
-| B14 | PASS | Full inherited offline suite and resource hashes; legacy CLI handlers unchanged except approval dispatch. Packaging allowlist includes Python subpackage. No agent/native pins, policy assets, source scope or GitHub behavior changed. |
-| B15 | SKIP | Separately authorized dummy-only native/Telegram host acceptance was not run. No native sandbox ID, runtime revision or live evidence exists. |
+| B01 | PASS | Exact pinned protobuf, CLI, Gateway handlers, review-token/persistence code, mTLS resolution and agent wait lifecycle inspected. Generated descriptor/source digests and wire field/method tests. Runtime exact version plus complete evidence required. Installed/live probe remains SKIP. |
+| B02 | PASS | Serialized request fixtures address exact workspace, sandbox and chunk. One explicit reviewed pending pair for approval; exact native reject with fixed reason. Empty/blanket list, raw-ID-only mutation and UpdateConfig unavailable. Candidate must add only the exact proposed rule and preserve existing authority. |
+| B03 | PASS | Native manual default or explicit MANUAL required. AUTO/global policy/unadmitted configuration refused. Manager phase/image, Ready/admission/load and reviewed filesystem/Landlock/process guards enforced. No native settings/policy/pin changes or host installation steps added. |
+| B04 | PASS | Bridge scans native RPCs with absent inbox; duplicate active proposal delivered once. Native ID/creation/sandbox/review generation dedup; same endpoint new chunk after rejection receives new notice. Changed review and expired pending requests receive fresh tokens/generations. Complete sanitized scope/risk, identity, expiry and buttons tested. |
+| B05 | PASS | Unauthorized numeric/string/bool user/chat, wrong message, forged/repurposed token rejected before mutation. Authorized actor recorded. Compatibility callback can never acquire native authority. |
+| B06 | PASS | SQLite concurrent atomic claim and callback tests; approve/reject sibling tokens consumed together; durable offset and replay protection. Expiry checked before claim AND immediately before native dispatch. Old expiry tokens cannot authorize a fresh generation. |
+| B07 | PASS | Sandbox UUID, instance, project pin/config, existing Manager tool-binding fingerprint, creation identity, native token, full rule, policy/provider fingerprints and risk drift refused. Discovery races and native precondition/zero-grant refusal tested. Stale generation never grants; native rejection lacks server-side CAS, so external-admin races require needs_review rather than exact success. |
+| B08 | PASS | Mocked native approved/rejected result checked against exact proposal and policy. Approval success requires candidate effective state, exact native revision/hash and LOADED/active version. Unconfirmed/pending load and rejection rule race never report success. Read-only later confirmation tested. Actual native host acceptance SKIP. |
+| B09 | PASS | Send/answer/status/native outages injected. Unknown sends/results held; no implicit grant or blind resend. New native IDs notify after recovery. Failed Telegram edit retries only the status, never the decision. |
+| B10 | PASS | Crash after atomic claim before RPC, lost response before/after mutation, delayed load and restart tests. Applying/needs_review reconciles only by reads; no mutation replay even with durable native request_id. Legacy fallback recovery retained. |
+| B11 | PASS | Existing inbox remains read-only notification fallback with Details only. Forged chunk/method/path/rationale ignored; missing native interface cannot grant through compatibility. Native normal operation needs no manual rules-pending/log refresh. |
+| B12 | PASS | Private 0700/0600 state and existing key files; owner/link checks, numeric identity validation, TLS verification and secret-bearing error suppression. Native rationale/credential values omitted, token-like scope redacted and approval disabled. Bot credentials never enter RPCs/guest arguments/public artifacts. Disclosure scan required below. |
+| B13 | PASS | Existing host-wide poller lock and operation lock reused, cooperative bounded stop, signal/DB cleanup, explicit service template/lifecycle. Native Gateway selection bound; no installer/setup auto enable. gRPC native sockets explicitly blocked in offline test guards. |
+| B14 | PASS | Full inherited offline suite and packaging/resource regression checks required below. PR3a provenance/source guards and native/model/tool pins unchanged. Added exact Python grpcio/protobuf dependencies for the host adapter; artifact/installed dependency checks updated. |
+| B15 | SKIP | No separately authorized isolated native sandbox/Telegram host acceptance ran. No live sandbox UUID/revision, actual agent retry trace or production deployment evidence exists. No paid model calls. |
 
-## Verification
+## Verification commands and evidence
 
-Focused tests cover native refusal, queue privacy/binding, expiry, replay,
-concurrency, restart, inbox sanitization/drift, Telegram failure/payload/redaction,
-identity authorization, long-poll shutdown and CLI/service lifecycle. All native
-and Telegram responses are mocks; inherited autouse guards prohibit live network
-and non-local-Git subprocesses.
+Focused suites cover the native API, automatic discovery/repeated identity,
+exact decisions/result confirmation, drift, authorization/replay/concurrency,
+outages/recovery, transport/privacy, SQLite migration and existing fallback.
+All fixtures are explicitly synthetic; no captured private native/Telegram data.
+Offline guards cover both Python sockets/urllib and gRPC's native sockets.
 
-Actual final verification (all commands used `UV_CACHE_DIR=/tmp/pr3a-uv-cache`):
+Final offline verification (2026-10-15), using
+`UV_CACHE_DIR=/tmp/pr3b-uv-cache` with cached public dependencies:
 
-- `uv run --offline --locked python -m pytest -q tests/test_approval.py`:
-  **39 passed**, final focused run 3.62 seconds.
-- `uv run --offline --locked python -m pytest -q`:
-  **326 passed, 16 skipped in 6.54 seconds**, exit 0. The 16 skips are inherited
-  Claude/OpenCode live cases requiring separate Founder approval.
-- `uv lock --offline --check`: exit 0; eight packages, no dependency changes.
-- `uv build --offline`: exit 0; wheel and sdist built successfully.
-- `uv run --offline --locked python tools/verify_packaging.py`: exit 0;
-  **35 wheel files, 76 sdist files, 12 reviewed resource hashes**. Isolated
-  Git-fixture uv installation works outside checkout with PyYAML 6.0.3.
-  Installed approval help/status/pending succeed; absent bot/bridge state
-  serve/stop refuse. No approval directory or native tripwire is created by
-  read-only commands. Legacy wrappers, pin mismatch and plain-wheel refusal pass.
-- `git diff --check`: exit 0. Final source/artifact disclosure scans found no
-  real credentials, host logs, private project profiles or workstation paths.
+| Command / check | Result |
+| --- | --- |
+| `uv run --offline --locked python -m pytest -q tests/test_approval_native.py` | 73 passed in 25.15 seconds after final code changes. |
+| `uv run --offline --locked python -m pytest -q` | **399 passed, 16 skipped** in 69.20 seconds. Skips are the existing explicitly gated Claude/OpenCode live evaluations. |
+| `uv lock --offline --check` | PASS; 11 resolved packages. |
+| `uv build --offline` | PASS; wheel and sdist built. |
+| `uv run --offline --locked python tools/verify_packaging.py` | PASS; 36 wheel files, 83 sdist files, 12 reviewed asset hashes; isolated local Git fixture installation, installed dependency assertions, legacy wrappers, provenance failures and native-operation tripwires. |
+| Final diff / disclosure review | PASS; whitespace, private-key/token/workstation-path patterns and runbook local links checked across all 23 changed/new public files; only synthetic fixtures included. |
 
-Build/install harness uses temporary isolated local Git fixtures and native
-tripwires; it never installs to the active host or calls real services.
+The fixture install commit is a disposable local packaging fixture, not the
+Manager release revision or live-host evidence. The full suite includes the
+existing fallback, packaging and Manager security regressions. Neither native nor
+Telegram sockets are permitted in the offline tests.
 
-## Remaining risks and deferred acceptance
+Use [the first real-run procedure](runbooks/telegram-approval-live.md) for explicit
+isolated acceptance, exact native proposal submission, Telegram decisions,
+agent-side wait/retry/rejection, sanitized evidence and the separate service
+enablement decision. Writing that procedure does not authorize or execute it. A disposable protobuf compiler environment was used only
+for schema generation; grpcio-tools is not a runtime dependency or native upgrade.
+Runtime direct dependencies are PyYAML 6.0.3, grpcio 1.76.0 and protobuf 6.33.6.
+No real host installation is performed by the local packaging fixture harness.
 
-B01 blocks reliable remote native decisions and B02/B07/B08 native acceptance.
-The fallback monitors existing compatibility inbox entries, not live proposals.
-No active inbox means no notices. Uncertain sends deliberately remain needs_review
-and may require manual discovery; delivery is not exactly once under HTTP failure.
-Details expiry cannot revoke native rules. Queue/audit retention is bounded and
-requires reviewed archival at the documented limit. One canonical state root
-coordinates pollers; separate host roots/other Telegram consumers are unsupported.
+## Remaining limits / operator stop conditions
 
-This implementation never persists runtime rules to project policy, changes
-native approval mode, upgrades pinned tools, starts a Gateway/VM, modifies OMA,
-creates real credentials, changes active host configuration or creates/merges a
-PR. Installation and updates never enable the service. The Founder must separately
-authorize future native interface work, dummy host acceptance and any deployment.
+- Live evidence is SKIP. An explicitly authorized isolated dummy sandbox must
+  prove native proposal discovery, exact enforcement, load and normal agent
+  wait/retry/rejection before deployment acceptance; no active VM may be modified.
+- Existing local HTTPS mTLS only. Missing credentials, required broader role,
+  unsupported auth/host/version or missing structured evidence means BLOCKED;
+  request an operator decision rather than create credentials/change Gateway.
+- P1 approval is narrower than all native proposals: clean explicit HTTPS REST
+  rules for curl/Manager-discovered pinned Codex paths, with existing authority
+  unchanged. Credentialed destination hosts are refused even with clean prover
+  output; native executable selectors are path-only, not fresh binary attestation.
+  GitHub/credential grants and unsupported/risky scope cannot be approved.
+- RejectDraftChunk has no review-token/CAS parameter. Exact pre-dispatch and
+  post-result checks preserve default deny and refuse false success; an
+  independent native administrator can race and native rejection may deny/remove
+  access. If atomic conditional rejection is required, stop deployment and seek
+  a separate decision. Manager's operation lock does not lock external admins.
+- Uncertain send/mutation/load requires read-only confirmation or manual review,
+  never automatic retry. A held uncertain identity cannot acquire a replacement
+  approval generation. Independent native changes can prevent later exact proof.
+- Legacy core policy-drift checks remain unchanged. Native runtime grants can
+  require separately reviewed reconciliation for future core CLI operations;
+  state.json/project policy is not silently rewritten to bypass those guards.
+- One canonical state root/project/bot, bounded queue and reviewed retention;
+  other roots/consumers and archival automation are outside P1. Disabling the
+  service never revokes an already-approved runtime native rule automatically.
+
+No OMA/PR4/PR5 work, broader generic authorizer, native version upgrade, service
+activation, active host mutation, real credential creation or PR/merge occurred.

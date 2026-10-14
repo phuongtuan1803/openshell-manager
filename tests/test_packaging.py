@@ -25,7 +25,7 @@ def test_package_metadata_and_tool_pins():
     project = tomllib.loads((REPO / 'pyproject.toml').read_text())['project']
     assert project['requires-python'] == '>=3.11'
     assert project['scripts'] == {'openshell-manager': 'openshell_manager.cli:main'}
-    assert project['dependencies'] == ['PyYAML==6.0.3']
+    assert project['dependencies'] == ['PyYAML==6.0.3', 'grpcio==1.76.0', 'protobuf==6.33.6']
     defaults = json.loads((RESOURCES / 'config/defaults/phase2.json').read_text())
     assert defaults['cli_version'] == 'openshell 0.1.2'
     assert defaults['codex_version'] == 'codex-cli 0.162.1'

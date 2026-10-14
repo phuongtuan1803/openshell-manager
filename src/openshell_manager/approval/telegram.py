@@ -1,5 +1,6 @@
 """Minimal outbound Bot API; errors never include URLs, responses or credentials."""
 import json
+from datetime import datetime, timezone
 import re
 import urllib.request
 
@@ -32,7 +33,7 @@ class Telegram:
         self._transport = transport or urllib.request.urlopen
 
     def call(self, method, **payload):
-        require(method in {'getUpdates', 'sendMessage', 'answerCallbackQuery'}, 'Unsupported Telegram method')
+        require(method in {'getUpdates', 'sendMessage', 'answerCallbackQuery', 'editMessageText'}, 'Unsupported Telegram method')
         try:
             request = urllib.request.Request('https://api.telegram.org/bot' + self._token + '/' + method,
                                              data=json.dumps(payload).encode(),
@@ -53,6 +54,8 @@ class Telegram:
             raise TelegramError('Telegram unavailable; no permission changed') from None
 
     def notify(self, chat, sandbox, row, token):
+        if row['kind'] == 'native':
+            return self.notify_native(chat, row, token)
         scope = json.loads(row['scope'])
         text = (f'Manual review only — {sandbox}\n'
                 f"Denied endpoint: {scope['host']}:{scope['port']} ({scope['binary']})\n"
@@ -64,3 +67,31 @@ class Telegram:
                            reply_markup={'inline_keyboard': [[{'text': 'Details', 'callback_data': token}]]})
         require(isinstance(result, dict) and type(result.get('message_id')) is int, 'Invalid Telegram message identity')
         return result['message_id']
+
+    def notify_native(self, chat, row, tokens):
+        snapshot = json.loads(row['snapshot'])
+        expiry = datetime.fromtimestamp(row['expires'], timezone.utc).isoformat()
+        text = (f"Project: {snapshot['project']} / Sandbox: {snapshot['sandbox']}\n"
+                f"Native proposal: {snapshot['chunk_id']}\n"
+                f"Sandbox ID: {snapshot['sandbox_id']}\n"
+                f"Risk: {snapshot['risk']}\n"
+                'Data risk: this executable can send data to the requested destination.\n'
+                f"Complete requested network rule:\n{snapshot['scope']}\n"
+                f"Effective policy: {snapshot['policy_hash']}\n"
+                f"Expires: {expiry} (15-minute review TTL).\n"
+                'Approve rule adds a runtime network rule; it is not one-time permission.')
+        buttons = []
+        if 'approve' in tokens:
+            buttons.append({'text': 'Approve rule', 'callback_data': tokens['approve']})
+        buttons += [{'text': 'Reject', 'callback_data': tokens['reject']},
+                    {'text': 'Details', 'callback_data': tokens['details']}]
+        require(len(text) <= 3900, 'Native notice too large; manual review required')
+        result = self.call('sendMessage', chat_id=chat, text=text, link_preview_options={'is_disabled': True},
+                           reply_markup={'inline_keyboard': [buttons]})
+        require(isinstance(result, dict) and type(result.get('message_id')) is int, 'Invalid Telegram message identity')
+        return result['message_id']
+
+    def status(self, chat, row, result):
+        self.call('editMessageText', chat_id=chat, message_id=row['message'],
+                  text=f"Native proposal {json.loads(row['snapshot'])['chunk_id']}: {result}",
+                  reply_markup={'inline_keyboard': []})

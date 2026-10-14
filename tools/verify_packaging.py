@@ -95,6 +95,8 @@ def smoke(wheel):
             assert installed_hashes[name] == expected, name
         dependencies = run([python, '-c', 'import importlib.metadata as m; print(m.version("PyYAML"))']).stdout.strip()
         assert dependencies == '6.0.3', dependencies
+        native_dependencies = json.loads(run([python, '-c', 'import importlib.metadata as m,json; print(json.dumps({n:m.version(n) for n in ("grpcio","protobuf")}))']).stdout)
+        assert native_dependencies == {'grpcio': '1.76.0', 'protobuf': '6.33.6'}
         project = base / 'project'
         project.mkdir()
         git(project, 'init', '-q')

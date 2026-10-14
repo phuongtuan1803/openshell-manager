@@ -1,0 +1,186 @@
+{
+  "_source": "NVIDIA/OpenShell v0.1.2 proto/openshell.proto and proto/sandbox.proto; synthetic values, no live evidence",
+  "GetSandbox": {
+    "sandbox": {
+      "metadata": {
+        "id": "sandbox-uuid-0001",
+        "name": "fixture-dev",
+        "labels": {
+          "manager.project": "fixture",
+          "manager.phase": "2",
+          "manager.image": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "workspace": "default"
+      },
+      "status": {
+        "phase": "SANDBOX_PHASE_READY",
+        "current_policy_version": 1,
+        "configuration_admission": {
+          "instance_id": "instance-1",
+          "state": "CONFIGURATION_ADMISSION_STATE_ACCEPTED",
+          "policy_version": 1,
+          "policy_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "config_revision": "5",
+          "provider_env_revision": "3"
+        }
+      }
+    }
+  },
+  "GetSandboxConfig": {
+    "policy": {
+      "version": 1,
+      "filesystem": {
+        "include_workdir": true,
+        "read_only": [
+          "/usr"
+        ],
+        "read_write": [
+          "/sandbox",
+          "/tmp"
+        ]
+      },
+      "landlock": {
+        "compatibility": "hard_requirement"
+      },
+      "process": {
+        "run_as_user": "sandbox",
+        "run_as_group": "sandbox"
+      }
+    },
+    "version": 1,
+    "policy_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "settings": {
+      "proposal_approval_mode": {
+        "value": {
+          "string_value": "manual"
+        },
+        "scope": "SETTING_SCOPE_SANDBOX"
+      }
+    },
+    "config_revision": "5",
+    "policy_source": "POLICY_SOURCE_SANDBOX",
+    "provider_env_revision": "3",
+    "workspace": "default",
+    "configuration_admitted": true,
+    "provider_attachment_epoch": "attachment-1",
+    "configuration_instance_id": "instance-1"
+  },
+  "GetDraftPolicy": {
+    "chunks": [
+      {
+        "id": "chunk-0001",
+        "status": "pending",
+        "rule_name": "docs_get",
+        "proposed_rule": {
+          "name": "docs_get",
+          "endpoints": [
+            {
+              "host": "docs.example.test",
+              "port": 443,
+              "protocol": "rest",
+              "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+              "rules": [
+                {
+                  "allow": {
+                    "method": "GET",
+                    "path": "/docs/**"
+                  }
+                }
+              ],
+              "ports": [
+                443
+              ],
+              "advisor_proposed": true
+            }
+          ],
+          "binaries": [
+            {
+              "path": "/usr/bin/curl"
+            }
+          ]
+        },
+        "binary": "/usr/bin/curl",
+        "validation_result": "prover: no new findings",
+        "review_token": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "current_effective_policy_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "candidate_effective_policy_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "current_effective_policy": {
+          "version": 1,
+          "filesystem": {
+            "include_workdir": true,
+            "read_only": [
+              "/usr"
+            ],
+            "read_write": [
+              "/sandbox",
+              "/tmp"
+            ]
+          },
+          "landlock": {
+            "compatibility": "hard_requirement"
+          },
+          "process": {
+            "run_as_user": "sandbox",
+            "run_as_group": "sandbox"
+          }
+        },
+        "candidate_effective_policy": {
+          "version": 1,
+          "filesystem": {
+            "include_workdir": true,
+            "read_only": [
+              "/usr"
+            ],
+            "read_write": [
+              "/sandbox",
+              "/tmp"
+            ]
+          },
+          "landlock": {
+            "compatibility": "hard_requirement"
+          },
+          "network_policies": {
+            "docs_get": {
+              "name": "docs_get",
+              "endpoints": [
+                {
+                  "host": "docs.example.test",
+                  "port": 443,
+                  "protocol": "rest",
+                  "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+                  "rules": [
+                    {
+                      "allow": {
+                        "method": "GET",
+                        "path": "/docs/**"
+                      }
+                    }
+                  ],
+                  "ports": [
+                    443
+                  ],
+                  "advisor_proposed": true
+                }
+              ],
+              "binaries": [
+                {
+                  "path": "/usr/bin/curl"
+                }
+              ]
+            }
+          },
+          "process": {
+            "run_as_user": "sandbox",
+            "run_as_group": "sandbox"
+          }
+        },
+        "created_time": "1970-01-01T00:16:40Z"
+      }
+    ],
+    "draft_version": "1"
+  },
+  "Health": {
+    "version": "0.1.2",
+    "status": "SERVICE_STATUS_HEALTHY"
+  }
+}
