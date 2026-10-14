@@ -1,0 +1,402 @@
+{
+  "reference_commit_from_plan": "f23b8926bf4adc663e5baca936c80a5844cec6ce",
+  "provenance": "User-supplied read-only snapshot; upstream commit identity was not independently verified.",
+  "files": [
+    {
+      "old_path": "infra/dev-sandbox/.dockerignore",
+      "new_path": "infra/dev-sandbox/.dockerignore",
+      "source_sha256": "08bb7a70af4ae5a9c15226f499f2e76055ebd521550f87eb102a1316cdb9df38",
+      "imported_sha256": "08bb7a70af4ae5a9c15226f499f2e76055ebd521550f87eb102a1316cdb9df38",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; deny-all build context, only Dockerfile allowed."
+    },
+    {
+      "old_path": "infra/dev-sandbox/Dockerfile",
+      "new_path": "infra/dev-sandbox/Dockerfile",
+      "source_sha256": "80cec3fffa1f7e208e8468a57bf177f51a896bca2b07aeef6d05265e08ae03fc",
+      "imported_sha256": "80cec3fffa1f7e208e8468a57bf177f51a896bca2b07aeef6d05265e08ae03fc",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; public upstream base digest and Codex pin; no COPY, credentials or mounts. APT/npm transitive inputs were already not fully locked."
+    },
+    {
+      "old_path": "infra/dev-sandbox/Dockerfile.agent",
+      "new_path": "infra/dev-sandbox/Dockerfile.agent",
+      "source_sha256": "d714afca5f76e566b4489767044afb828e6b6f62d078f85dd0c3844bdbed6fd5",
+      "imported_sha256": "cb543f7a942e65b6003dec254edd24381d4bf03d2f32518d1a3d6bd9037d7ece",
+      "byte_identical": false,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Private local image tag prefix replaced by zeros; agent package/version pins retained. Not built."
+    },
+    {
+      "old_path": "infra/dev-sandbox/agents.py",
+      "new_path": "infra/dev-sandbox/agents.py",
+      "source_sha256": "a9f5f4277b09abe6f5f67d0b0c790099039bc134cc87d1ee60135bf9c4f29b5d",
+      "imported_sha256": "a9f5f4277b09abe6f5f67d0b0c790099039bc134cc87d1ee60135bf9c4f29b5d",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; CLI argument validation, live gate and numeric-only accounting retained; no auth values."
+    },
+    {
+      "old_path": "infra/dev-sandbox/bootstrap.py",
+      "new_path": "infra/dev-sandbox/bootstrap.py",
+      "source_sha256": "28f7cf0c77eecb5a6a5cd3b29669cf7e3987f1afe29fc14f49d8a5d1d8ec3999",
+      "imported_sha256": "28f7cf0c77eecb5a6a5cd3b29669cf7e3987f1afe29fc14f49d8a5d1d8ec3999",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; public release URLs/checksums, no-replacement configuration and pinned binary delivery; privileged calls mocked only."
+    },
+    {
+      "old_path": "infra/dev-sandbox/cleanup.sh",
+      "new_path": "infra/dev-sandbox/cleanup.sh",
+      "source_sha256": "24da5ed96b841ab068c6059bd910b3b473de45d2556b3f8663fa7f5833f2aa57",
+      "imported_sha256": "24da5ed96b841ab068c6059bd910b3b473de45d2556b3f8663fa7f5833f2aa57",
+      "byte_identical": true,
+      "source_mode": "0o775",
+      "imported_mode": "0o775",
+      "review": "Byte-identical; fixed controller command, never executed."
+    },
+    {
+      "old_path": "infra/dev-sandbox/control.py",
+      "new_path": "infra/dev-sandbox/control.py",
+      "source_sha256": "7a8a9c31783c6f6049f7cc6355ecc3dcd29c6daa114b6504c5083ef3f8ca08f7",
+      "imported_sha256": "32653e62e81ca77cacc42ce956e61ed8f8a977c43bcddab6d89409b59b3c3976",
+      "byte_identical": false,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Exact sandbox/provider identity literals sanitized; policy admission/revision/hash checks, journaling, terminal confirmation and deny boundary unchanged."
+    },
+    {
+      "old_path": "infra/dev-sandbox/edit-scope.txt",
+      "new_path": "infra/dev-sandbox/edit-scope.txt",
+      "source_sha256": "20bc47da21be7bcb5d067027bd1067ea5a118952085be78fc4f3e63a3131239f",
+      "imported_sha256": "20bc47da21be7bcb5d067027bd1067ea5a118952085be78fc4f3e63a3131239f",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; two generic pilot Python files only; instructions are not writable."
+    },
+    {
+      "old_path": "infra/dev-sandbox/export.sh",
+      "new_path": "infra/dev-sandbox/export.sh",
+      "source_sha256": "ca9579c64c75582fc7422b84b93c4e766aec7041750c4f1dc39710ffac0a4a01",
+      "imported_sha256": "ca9579c64c75582fc7422b84b93c4e766aec7041750c4f1dc39710ffac0a4a01",
+      "byte_identical": true,
+      "source_mode": "0o775",
+      "imported_mode": "0o775",
+      "review": "Byte-identical; fixed controller export command."
+    },
+    {
+      "old_path": "infra/dev-sandbox/gateway.vm.example.toml",
+      "new_path": "infra/dev-sandbox/gateway.vm.example.toml",
+      "source_sha256": "3bab5072a2969fa83380ed109c491a8cfc46703e6f5ea04270bf7cae3d13e15e",
+      "imported_sha256": "3164b2885cdb9a5ae4cae1da22f8f590d5ba52b7da3275d85ccfd96eb85f62d3",
+      "byte_identical": false,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "OMA service comment made generic; loopback VM settings and version preserved; no TLS or host identifiers."
+    },
+    {
+      "old_path": "infra/dev-sandbox/github.sh",
+      "new_path": "infra/dev-sandbox/github.sh",
+      "source_sha256": "95994d091728e0214b40574d0e122bbc8672649b608a0b9abe1daf495385bb4c",
+      "imported_sha256": "95994d091728e0214b40574d0e122bbc8672649b608a0b9abe1daf495385bb4c",
+      "byte_identical": true,
+      "source_mode": "0o775",
+      "imported_mode": "0o775",
+      "review": "Byte-identical; existing explicit provider/credential operator entrypoint."
+    },
+    {
+      "old_path": "infra/dev-sandbox/github_provider.py",
+      "new_path": "infra/dev-sandbox/github_provider.py",
+      "source_sha256": "e9bc90b65f065393eadad253d96e8df708c4a9231423e0bd92433b77e01eeb93",
+      "imported_sha256": "a1316fe6a44685ada11173b7e5ca1628ef88e32736e76f152fcc93017ef83403",
+      "byte_identical": false,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Repository/provider literals sanitized; exact receipt/composition checks and secret handling retained; public gh checksum unchanged."
+    },
+    {
+      "old_path": "infra/dev-sandbox/guest.py",
+      "new_path": "infra/dev-sandbox/guest.py",
+      "source_sha256": "6611a8c35f310b3695479d02690ca807d30ee66aacbe689820eaaa4900cff00a",
+      "imported_sha256": "6611a8c35f310b3695479d02690ca807d30ee66aacbe689820eaaa4900cff00a",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; trusted guest operations, file/provenance checks, non-root/tool identity discovery; no downloaded source."
+    },
+    {
+      "old_path": "infra/dev-sandbox/phase2.json",
+      "new_path": "infra/dev-sandbox/phase2.json",
+      "source_sha256": "6f0f7d5b5c46819efc123173d064e7517e2a3a3750e852f5d33c8e5f14f24603",
+      "imported_sha256": "73ae13e235eb04ec7b080cc1c1f2b37e593a2c2f66ee6dba2247b5863d9a76db",
+      "byte_identical": false,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Example sandbox/image/provider/repository, zero private image digest, cleared historical Codex verification list and generic review text; all versions/rule endpoints retained as examples."
+    },
+    {
+      "old_path": "infra/dev-sandbox/policy.yaml",
+      "new_path": "infra/dev-sandbox/policy.yaml",
+      "source_sha256": "87aa57b9f878b4f7e4d5a754e38dbb08a57eb0339414c5c2cbca6786d025fc27",
+      "imported_sha256": "87aa57b9f878b4f7e4d5a754e38dbb08a57eb0339414c5c2cbca6786d025fc27",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; generic curl-only GitHub read access, hard-required Landlock and original filesystem scope."
+    },
+    {
+      "old_path": "infra/dev-sandbox/refresh.sh",
+      "new_path": "infra/dev-sandbox/refresh.sh",
+      "source_sha256": "aad2f761a5aaa750d16a2b27bbb3c50e01284d7041db3da821a47c6e48dff46a",
+      "imported_sha256": "aad2f761a5aaa750d16a2b27bbb3c50e01284d7041db3da821a47c6e48dff46a",
+      "byte_identical": true,
+      "source_mode": "0o775",
+      "imported_mode": "0o775",
+      "review": "Byte-identical; existing controller forwarding."
+    },
+    {
+      "old_path": "infra/dev-sandbox/rules.sh",
+      "new_path": "infra/dev-sandbox/rules.sh",
+      "source_sha256": "f47bf5b8f7b0f7d681a02ccc5039df4375c82be7776c5da21da2ff511a242512",
+      "imported_sha256": "f47bf5b8f7b0f7d681a02ccc5039df4375c82be7776c5da21da2ff511a242512",
+      "byte_identical": true,
+      "source_mode": "0o775",
+      "imported_mode": "0o775",
+      "review": "Byte-identical; operator approval wrapper; no Telegram."
+    },
+    {
+      "old_path": "infra/dev-sandbox/session.py",
+      "new_path": "infra/dev-sandbox/session.py",
+      "source_sha256": "ec785e509fc95ad641eedc0f1f20e3cbbd9e3a4f160c89b5f2886bc833d7d922",
+      "imported_sha256": "c3366c7f2ad541d52330eb3ea2264842ae08a9f5d04472a788fb55d338ed6614",
+      "byte_identical": false,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Exact repository/credential-helper URL literals sanitized; locking, HTTPS-only helper, redaction and conservative sync logic retained."
+    },
+    {
+      "old_path": "infra/dev-sandbox/setup.sh",
+      "new_path": "infra/dev-sandbox/setup.sh",
+      "source_sha256": "4b77d72e24cd716261d26ddea0e05ccb3d5c517f2735c69c3c763591ab5df687",
+      "imported_sha256": "4b77d72e24cd716261d26ddea0e05ccb3d5c517f2735c69c3c763591ab5df687",
+      "byte_identical": true,
+      "source_mode": "0o775",
+      "imported_mode": "0o775",
+      "review": "Byte-identical; existing bootstrap/check/dry-run routing; installs never executed."
+    },
+    {
+      "old_path": "infra/dev-sandbox/snapshot.py",
+      "new_path": "infra/dev-sandbox/snapshot.py",
+      "source_sha256": "69530c8d5f72a7ff467eab17b7c6d221c551d47c076482e7a9b6895866eec74b",
+      "imported_sha256": "69530c8d5f72a7ff467eab17b7c6d221c551d47c076482e7a9b6895866eec74b",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; committed exact blobs, private-path/content screening, symlink/size checks and fresh outputs."
+    },
+    {
+      "old_path": "infra/dev-sandbox/source-manifest.txt",
+      "new_path": "infra/dev-sandbox/source-manifest.txt",
+      "source_sha256": "6a88486b20042d43c4535412be995fbf1e7970bd9f8995aa4c0399d29f9931b9",
+      "imported_sha256": "6a88486b20042d43c4535412be995fbf1e7970bd9f8995aa4c0399d29f9931b9",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; only the three generic pilot files; no private project source."
+    },
+    {
+      "old_path": "infra/dev-sandbox/start.sh",
+      "new_path": "infra/dev-sandbox/start.sh",
+      "source_sha256": "d2da39636cea5e2646ba2c4c05e80e8f7713eceb32d4fec1d090c4ed83c0c2f4",
+      "imported_sha256": "d2da39636cea5e2646ba2c4c05e80e8f7713eceb32d4fec1d090c4ed83c0c2f4",
+      "byte_identical": true,
+      "source_mode": "0o775",
+      "imported_mode": "0o775",
+      "review": "Byte-identical; existing interactive/autonomous routing."
+    },
+    {
+      "old_path": "infra/dev-sandbox/validate.py",
+      "new_path": "infra/dev-sandbox/validate.py",
+      "source_sha256": "c192e0ab3a64b541b005858c2b780aa034ae03d636acdaeef9545dcca091e25d",
+      "imported_sha256": "c192e0ab3a64b541b005858c2b780aa034ae03d636acdaeef9545dcca091e25d",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; dummy-only live-probe launcher imported because mocked launcher tests require it; never run against a VM."
+    },
+    {
+      "old_path": "infra/dev-sandbox/validate_guest.py",
+      "new_path": "infra/dev-sandbox/validate_guest.py",
+      "source_sha256": "53f25ab01bfaf360f3b328052e77328bd14abc964320bb928fb1cc76c062872b",
+      "imported_sha256": "53f25ab01bfaf360f3b328052e77328bd14abc964320bb928fb1cc76c062872b",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; generic isolation/network probe source, no recorded host/guest results; never executed."
+    },
+    {
+      "old_path": "infra/dev-sandbox/verify.sh",
+      "new_path": "infra/dev-sandbox/verify.sh",
+      "source_sha256": "360637f86017d7ff9d607a3aaf1a1d189f63696d758873ad0cc29864d29f3827",
+      "imported_sha256": "3f8a1ad0b0f2da3ac26f569b8dd739ade1d8351a86060d77e27d5d87432cace6",
+      "byte_identical": false,
+      "source_mode": "0o775",
+      "imported_mode": "0o775",
+      "review": "Host readiness route retained; private runbook renderer and missing OMA tooling replaced by explicit unsupported --reports error."
+    },
+    {
+      "old_path": "infra/dev-sandbox/workflow.py",
+      "new_path": "infra/dev-sandbox/workflow.py",
+      "source_sha256": "3a16e0bbec84c697f81b87fad27142b176d1ff913cd911412ecddc97c67d8874",
+      "imported_sha256": "918f669b9f8e35137509aa2cb78f65f73dbbe9ca87d9645548da762c398fa2e5",
+      "byte_identical": false,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Exact repository/provider literals sanitized; scope filtering, retries, locks, accounting and publication guard logic retained."
+    },
+    {
+      "old_path": "infra/dev-sandbox/policies/claude.json",
+      "new_path": "infra/dev-sandbox/policies/claude.json",
+      "source_sha256": "dab1cd89256a787cc93a3af58139202b5d860be2aa703cfaa69759e8770a6315",
+      "imported_sha256": "dab1cd89256a787cc93a3af58139202b5d860be2aa703cfaa69759e8770a6315",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; public API endpoint template; disabled, manual, default deny; no credential values."
+    },
+    {
+      "old_path": "infra/dev-sandbox/policies/github.yaml",
+      "new_path": "infra/dev-sandbox/policies/github.yaml",
+      "source_sha256": "fdaa5b864bb325ef77e7b0e1695c008843695de74295670a3f48a28175ab37dd",
+      "imported_sha256": "43ae042513cac572eed6144dd518d1fdc9ce3427117ae1231c0d1aa007eda21c",
+      "byte_identical": false,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Exact repository/provider and display strings made examples; methods/paths/binaries remain equally scoped, no added endpoints."
+    },
+    {
+      "old_path": "infra/dev-sandbox/policies/opencode.json",
+      "new_path": "infra/dev-sandbox/policies/opencode.json",
+      "source_sha256": "eaf85f4c72ff5de8015daeffaca56815faa0d6941b721525ba17fc3ac070c5e0",
+      "imported_sha256": "eaf85f4c72ff5de8015daeffaca56815faa0d6941b721525ba17fc3ac070c5e0",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; separate public provider templates; no provider selected and no credentials."
+    },
+    {
+      "old_path": "infra/dev-sandbox/pilot/AGENTS.md",
+      "new_path": "infra/dev-sandbox/pilot/AGENTS.md",
+      "source_sha256": "483eb32f8d7584d3def89b8bc84092471fe9dbde1e4be0043717d6bd24553463",
+      "imported_sha256": "483eb32f8d7584d3def89b8bc84092471fe9dbde1e4be0043717d6bd24553463",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; isolated generic calculator task instructions, no business data."
+    },
+    {
+      "old_path": "infra/dev-sandbox/pilot/calculator.py",
+      "new_path": "infra/dev-sandbox/pilot/calculator.py",
+      "source_sha256": "23088543d3e134f94ce36228b5037d82f0bf6a4953f87e9f45e2a1ddd6d23929",
+      "imported_sha256": "23088543d3e134f94ce36228b5037d82f0bf6a4953f87e9f45e2a1ddd6d23929",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; generic integer multiplication fixture; intentionally preserves existing pilot behavior."
+    },
+    {
+      "old_path": "infra/dev-sandbox/pilot/test_calculator.py",
+      "new_path": "infra/dev-sandbox/pilot/test_calculator.py",
+      "source_sha256": "8830f84581adf6d27bd0aed97668c49e2bfcbff9c71030e1911035e3aaa66a1d",
+      "imported_sha256": "8830f84581adf6d27bd0aed97668c49e2bfcbff9c71030e1911035e3aaa66a1d",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; local arithmetic fixture assertions."
+    },
+    {
+      "old_path": "tools/tests/test_dev_sandbox.py",
+      "new_path": "tools/tests/test_dev_sandbox.py",
+      "source_sha256": "d6124b273154b6c54600b063be1d56504557e50a255e5d2b364a916694f1fffc",
+      "imported_sha256": "d6124b273154b6c54600b063be1d56504557e50a255e5d2b364a916694f1fffc",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; temporary Git source export, synthetic credential detection, path/symlink/submodule rejection and gateway template."
+    },
+    {
+      "old_path": "tools/tests/test_dev_sandbox_agents.py",
+      "new_path": "tools/tests/test_dev_sandbox_agents.py",
+      "source_sha256": "f2037f71f47b219c41551bc67e6d893a9c466776cd8c3c320b3c622fef90bc4e",
+      "imported_sha256": "f2037f71f47b219c41551bc67e6d893a9c466776cd8c3c320b3c622fef90bc4e",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; inert adapters/workflows, scope and branch checks, accounting redaction; 16 explicit live skips."
+    },
+    {
+      "old_path": "tools/tests/test_dev_sandbox_bootstrap.py",
+      "new_path": "tools/tests/test_dev_sandbox_bootstrap.py",
+      "source_sha256": "119121f2b6e7fb51996c586ba8e8e89e7ed3853d5701228857757e4d303e64ae",
+      "imported_sha256": "119121f2b6e7fb51996c586ba8e8e89e7ed3853d5701228857757e4d303e64ae",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; inert sudo/systemd/Docker/download doubles and temporary config; no active host operations."
+    },
+    {
+      "old_path": "tools/tests/test_dev_sandbox_github.py",
+      "new_path": "tools/tests/test_dev_sandbox_github.py",
+      "source_sha256": "c2df24ed99eef85bff62d73a18e746ac35efdb7b9cb4afb1cd110cf872d63fe2",
+      "imported_sha256": "9f10772315f984d8086e16ac20608e8e7b30e8a6b365afe0a51c9c9c9ba0cc9c",
+      "byte_identical": false,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Literal provider/repository matching sanitized; mocked native lifecycle, credential redaction and receipt verification."
+    },
+    {
+      "old_path": "tools/tests/test_dev_sandbox_launcher.py",
+      "new_path": "tools/tests/test_dev_sandbox_launcher.py",
+      "source_sha256": "7f702bdf7aefc3121b0eeb124e3cf1053311a3e13b0a6c770a3c17da8c98dc31",
+      "imported_sha256": "7f702bdf7aefc3121b0eeb124e3cf1053311a3e13b0a6c770a3c17da8c98dc31",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; mocked VM upload/exec and temporary dummy fixture; no actual guest probes."
+    },
+    {
+      "old_path": "tools/tests/test_dev_sandbox_phase2.py",
+      "new_path": "tools/tests/test_dev_sandbox_phase2.py",
+      "source_sha256": "14fe1d15309341e397d668d327ca3feb2de6d7ea5532ba68b5bc4c0b887d77c0",
+      "imported_sha256": "14fe1d15309341e397d668d327ca3feb2de6d7ea5532ba68b5bc4c0b887d77c0",
+      "byte_identical": true,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Byte-identical; mocked policy operations and real local Git apply checks; preserves boundary assertions."
+    },
+    {
+      "old_path": "tools/tests/test_dev_sandbox_session.py",
+      "new_path": "tools/tests/test_dev_sandbox_session.py",
+      "source_sha256": "f475bcd044bc2d995ef26229e8c495443149c910044346f1d23df30ae5e3d88d",
+      "imported_sha256": "77cbf0827576b026f75839685e906dfc6768cd53033c774d8a2989990db76906",
+      "byte_identical": false,
+      "source_mode": "0o664",
+      "imported_mode": "0o664",
+      "review": "Repository literals sanitized; temporary local bare repositories, synthetic credentials through local Git helper; no remote network."
+    }
+  ],
+  "excluded": [
+    {
+      "path": "infra/dev-sandbox/github-verification.json",
+      "reason": "Historical live evidence and private repository protection/account limitations; not required by code or tests."
+    }
+  ]
+}

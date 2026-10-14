@@ -1,0 +1,4 @@
+# Exact committed files. Extend only through a reviewed PR for the task scope.
+infra/dev-sandbox/pilot/calculator.py
+infra/dev-sandbox/pilot/test_calculator.py
+infra/dev-sandbox/pilot/AGENTS.md

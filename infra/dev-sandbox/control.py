@@ -1,0 +1,1303 @@
+"""Deterministic OpenShell 0.1.2 operator workflow; no host credential transfer."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import difflib
+import fcntl
+import hashlib
+import io
+import json
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import tomllib
+import uuid
+from contextlib import contextmanager, redirect_stdout
+from pathlib import Path
+
+import bootstrap
+import github_provider
+import snapshot
+import workflow
+
+import agents
+
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parent.parent
+STATE = REPO / ".work/openshell-phase2"
+CONFIG = HERE / "phase2.json"
+NAME = "example-dev-phase2"  # Never accept arbitrary resource names from guest data/environment.
+MAX_TRANSFER = 8 * 1024 * 1024
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def safe_dir(path):
+    require(path.resolve() == path.absolute(), "Symlink in local state/output path")
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+
+def save(path, value):
+    safe_dir(path.parent)
+    require(not path.is_symlink(), "Symlink state file")
+    temp = path.with_name(path.name + "." + uuid.uuid4().hex)
+    with temp.open("x") as stream:
+        json.dump(value, stream, indent=2)
+        stream.write("\n")
+    temp.chmod(0o600)
+    temp.replace(path)
+
+
+def read(path):
+    require(path.resolve() == path.absolute(), "Symlink state input")
+    return json.loads(path.read_text())
+
+
+def command(args, *, check=True, interactive=False, timeout=120):
+    # Never print arbitrary stdout/stderr: CLI/guest logs can contain auth material.
+    result = subprocess.run(
+        args, text=True, capture_output=not interactive, check=False, timeout=timeout
+    )
+    if check and result.returncode:
+        raise ValueError(
+            f"Command failed ({result.returncode}): {args[0:3]}; "
+            "run setup.sh --check or rules.sh diagnose"
+        )
+    return result
+
+
+def oshell(*args, **kwargs):
+    return command(["openshell", *args], **kwargs)
+
+
+def api(*args):
+    return json.loads(oshell(*args, "-o", "json").stdout)
+
+
+def settings():
+    data = read(CONFIG)
+    require(data["sandbox"] == NAME, "Phase 2 resource name drift")
+    return data
+
+
+def config_hash():
+    return digest(
+        CONFIG.read_bytes()
+        + (HERE / "source-manifest.txt").read_bytes()
+        + (HERE / "edit-scope.txt").read_bytes()
+    )
+
+
+def execute(*args, interactive=False, workdir="/sandbox", check=True, timeout=120):
+    return oshell(
+        "sandbox",
+        "exec",
+        "--name",
+        NAME,
+        "--no-login-shell",
+        "--tty" if interactive else "--no-tty",
+        "--workdir",
+        workdir,
+        "--env",
+        "CODEX_HOME=/sandbox/.codex",
+        "--",
+        *args,
+        interactive=interactive,
+        check=check,
+        timeout=None if interactive else timeout,
+    )
+
+
+def session(action, *, interactive=False, check=True, timeout=300, **fields):
+    payload = base64.b64encode(json.dumps({"action": action, **fields}).encode()).decode()
+    return execute(
+        "/usr/bin/python3",
+        "-I",
+        "-c",
+        (HERE / "session.py").read_text(),
+        payload,
+        interactive=interactive,
+        check=check,
+        timeout=timeout,
+    )
+
+
+def sync_checkout(check=False, base="main"):
+    if task_active():
+        value = {
+            "status": "SKIP",
+            "state": "active-agent",
+            "fix": "Wait for the bounded task to finish, then retry.",
+        }
+        print("SKIP: active agent task; no checkout synchronization")
+        return value
+    result = session("sync", read_only=check, base=base)
+    value = json.loads(result.stdout)
+    print(f"{value['status']}: OMA /sandbox/oma {value['state']}")
+    if value.get("fix"):
+        print(value["fix"])
+    return value
+
+
+def guest(action, **fields):
+    payload = base64.b64encode(json.dumps({"action": action, **fields}).encode()).decode()
+    result = execute("/usr/bin/python3", "-I", "-c", (HERE / "guest.py").read_text(), payload)
+    require(len(result.stdout) <= MAX_TRANSFER * 2, "Guest transfer exceeds limit")
+    return json.loads(result.stdout)
+
+
+def ready(info):
+    require(
+        info["name"] == NAME and info["phase"] == "Ready",
+        "Development sandbox is not Ready. Run start.sh resume, then setup.sh --check",
+    )
+    require(
+        info["configuration_admission"]["state"] == "accepted",
+        "Configuration not accepted; run rules.sh diagnose",
+    )
+
+
+def normalize(policy):
+    result = json.loads(json.dumps(policy))
+    result.setdefault("network_policies", {})
+    for rule in result["network_policies"].values():
+        rule["binaries"] = sorted(
+            [{"path": b} if isinstance(b, str) else b for b in rule["binaries"]],
+            key=lambda b: b["path"],
+        )
+    return result
+
+
+def effective(expected=None, github_profile=None):
+    info = api("sandbox", "get", NAME)
+    ready(info)
+    policy = api("policy", "get", NAME, "--full")
+    history = api("policy", "list", NAME)
+    composed = any(k.startswith("_provider_") for k in policy["policy"]["network_policies"])
+    base = github_provider.base_policy(sys.modules[__name__], policy["policy"], github_profile)
+    loaded = any(
+        row["version"] == policy["version"]
+        and row["status"] == "loaded"
+        and (composed or row["hash"] == policy["hash"])
+        for row in history["revisions"]
+    )
+    require(
+        loaded
+        and policy["status"] == "effective"
+        and policy["active_version"] == policy["version"]
+        and policy["policy_source"] == "sandbox"
+        and info["configuration_admission"]["policy_version"] == policy["version"]
+        and info["configuration_admission"]["policy_hash"] == policy["hash"],
+        "Policy revision is not Loaded and effective; run rules.sh status",
+    )
+    mode = json.loads(oshell("settings", "get", NAME, "--json").stdout)
+    require(
+        mode["settings"]["proposal_approval_mode"]["value"] in {"<unset>", "manual"},
+        "Native proposal approval is not manual; review settings before use",
+    )
+    if expected is not None:
+        require(
+            normalize(base) == normalize(expected),
+            "Effective policy drift. No replacement performed. Run rules.sh status; "
+            "use rules.sh recover only for an interrupted wrapper change",
+        )
+    if composed:
+        github_provider.status(sys.modules[__name__], info, policy["hash"])
+    return policy
+
+
+def state(allow_config_drift=False):
+    data = read(STATE / "state.json")
+    require(
+        allow_config_drift or data["config_hash"] == config_hash(),
+        "Reviewed configuration drift; review PR then run rules.sh reconcile",
+    )
+    info = api("sandbox", "get", NAME)
+    require(info["id"] == data["sandbox_id"], "Sandbox identity changed; setup review required")
+    return data
+
+
+def preflight():
+    require(
+        platform.system() == "Linux" and platform.machine() == "x86_64",
+        "Validated host requires Linux x86_64",
+    )
+    for binary in ("openshell", "openshell-gateway", "docker", "git", "python3"):
+        require(
+            shutil.which(binary), f"Missing dependency: {binary}. Install it, then run setup.sh"
+        )
+    require(
+        oshell("--version").stdout.strip() == settings()["cli_version"],
+        "Unsupported OpenShell version; no upgrade performed",
+    )
+    require(
+        os.access("/dev/kvm", os.R_OK | os.W_OK),
+        "KVM denied. Check id and /dev/kvm permissions; sign in again after approved group change",
+    )
+    overrides = [key for key in os.environ if key.startswith("OPENSHELL_")]
+    require(
+        not overrides, "OpenShell environment override detected; use the reviewed local gateway"
+    )
+    cfg = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+    cfg = cfg / "openshell/gateway.toml"
+    require(
+        cfg.is_file(),
+        "Gateway config missing. Follow Phase 1 gateway installation; no host changes",
+    )
+    data = tomllib.loads(cfg.read_text())["openshell"]
+    require(
+        data["version"] == 2
+        and data["gateway"]["compute_driver"] == "vm"
+        and data["gateway"]["bind_address"] == "127.0.0.1:17670",
+        "Gateway config drift: schema v2 loopback VM required",
+    )
+    driver = Path(data["drivers"]["vm"]["driver_dir"]) / "openshell-driver-vm"
+    require(driver.is_file() and os.access(driver, os.X_OK), "VM driver executable missing")
+    for binary in ("openshell-gateway", str(driver)):
+        require(
+            "0.1.2" in command([binary, "--version"]).stdout,
+            "Gateway/VM driver version mismatch; install OpenShell 0.1.2",
+        )
+    command(["openshell-gateway", "config", "preflight", "--path", str(cfg)])
+    # Establish that the active process uses the reviewed default configuration.
+    pid = command(
+        ["systemctl", "--user", "show", "openshell-gateway", "--property=MainPID", "--value"]
+    ).stdout.strip()
+    require(
+        pid.isdigit() and pid != "0",
+        "User gateway service not active; run systemctl --user status openshell-gateway",
+    )
+    argv = (Path("/proc") / pid / "cmdline").read_bytes().split(b"\0")
+    env = (Path("/proc") / pid / "environ").read_bytes().split(b"\0")
+    entries = dict(item.split(b"=", 1) for item in env if b"=" in item)
+    require(
+        argv == [b"/usr/bin/openshell-gateway", b""]
+        and entries.get(b"HOME") == str(Path.home()).encode()
+        and not any(
+            k.startswith(b"OPENSHELL_") and k != b"OPENSHELL_LOCAL_TLS_DIR" for k in entries
+        )
+        and entries.get(b"XDG_CONFIG_HOME", str(Path.home() / ".config").encode())
+        == str(cfg.parent.parent).encode(),
+        "Running gateway config cannot be established; inspect service overrides manually",
+    )
+    # Contents are used only for configuration selection and are never printed or stored.
+    oshell("status")
+    command(["docker", "info", "--format", "{{.ServerVersion}}"])
+    print("PASS: Linux, Docker, KVM, CLI 0.1.2, gateway, VM driver and config")
+
+
+def image(check=False):
+    cfg = settings()
+    result = command(
+        ["docker", "image", "inspect", cfg["image_id"], "--format", "{{.Id}}"], check=False
+    )
+    if result.returncode:
+        recipe = digest((HERE / "Dockerfile").read_bytes())
+        built = command(["docker", "image", "inspect", cfg["image"]], check=False)
+        info = json.loads(built.stdout)[0] if built.returncode == 0 else None
+        if info:
+            require(
+                info["Config"].get("Labels", {}).get("oma.dockerfile") == recipe,
+                "Existing image tag has an incompatible recipe; preserved for review",
+            )
+        require(info or not check, "Pinned image missing; run setup.sh to build the image")
+        # Build in an empty context: never send repository/secrets to Docker.
+        if not info:
+            with tempfile.TemporaryDirectory(prefix="oma-phase2-build-") as temp:
+                shutil.copyfile(HERE / "Dockerfile", Path(temp) / "Dockerfile")
+                command(
+                    [
+                        "docker",
+                        "build",
+                        "--label",
+                        "oma.dockerfile=" + recipe,
+                        "-t",
+                        cfg["image"],
+                        temp,
+                    ],
+                    timeout=1800,
+                )
+        actual = command(
+            ["docker", "image", "inspect", cfg["image"], "--format", "{{.Id}}"]
+        ).stdout.strip()
+        require(re.fullmatch(r"sha256:[a-f0-9]{64}", actual), "Invalid Docker image ID")
+        if check:
+            inventory = read(STATE / "built-image-review.json")
+            require(
+                inventory["image_id"] == actual
+                and inventory["dockerfile_sha256"] == recipe
+                and inventory["codex_version"] == cfg["codex_version"],
+                "Local image inventory differs; run setup.sh to verify it",
+            )
+            return actual
+        version = command(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "--read-only",
+                "--entrypoint",
+                "/usr/local/bin/codex",
+                actual,
+                "--version",
+            ]
+        ).stdout.strip()
+        require(version == cfg["codex_version"], "Built image Codex version mismatch")
+        inventory = {
+            "image_id": actual,
+            "dockerfile_sha256": recipe,
+            "codex_version": version,
+            "inventory": command(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--network",
+                    "none",
+                    "--read-only",
+                    "--entrypoint",
+                    "/usr/bin/dpkg-query",
+                    actual,
+                    "-W",
+                ]
+            ).stdout.splitlines(),
+        }
+        if not check:
+            save(STATE / "built-image-review.json", inventory)
+        print("PASS: recipe, pinned Codex and local image digest verified; inventory recorded")
+        return actual
+    require(result.stdout.strip() == cfg["image_id"], "Image identity mismatch")
+    print("PASS: compatible pinned development image reused")
+    return cfg["image_id"]
+
+
+def validate_rule(rule):
+    require(re.fullmatch(r"[a-z][a-z0-9_]{1,60}", rule["id"]), "Invalid rule ID")
+    require(
+        re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", rule["host"])
+        and "." in rule["host"]
+        and ".." not in rule["host"]
+        and not re.fullmatch(r"[0-9.]+", rule["host"]),
+        "Exact DNS hostname required",
+    )
+    require(rule["port"] == 443, "Compatibility wrapper allows HTTPS 443 only")
+    require(rule["access"] in {"read-only", "full"}, "Invalid endpoint access")
+    for binary in rule["binaries"]:
+        require(
+            re.fullmatch(r"/(?:[A-Za-z0-9_@.+-]+/)*[A-Za-z0-9_@.+-]+", binary),
+            "Exact executable path required",
+        )
+
+
+def base_policy():
+    # Preserve the Phase 1 filesystem boundary; this is a separate sandbox policy.
+    return {
+        "version": 1,
+        "filesystem_policy": {
+            "include_workdir": True,
+            "read_only": [
+                "/bin",
+                "/usr",
+                "/lib",
+                "/proc",
+                "/dev/urandom",
+                "/app",
+                "/etc",
+                "/var/log",
+            ],
+            "read_write": ["/sandbox", "/tmp", "/dev/null"],
+        },
+        "landlock": {"compatibility": "hard_requirement"},
+        "network_policies": {},
+    }
+
+
+def policy_for(tools):
+    policy = base_policy()
+    for default in settings()["rules"]:
+        rule = {
+            **default,
+            "binaries": tools["binaries"]
+            if default.get("agent") == "codex"
+            else [default["binary"]],
+        }
+        require(
+            all(b in tools["binaries"] + ["/usr/bin/curl"] for b in rule["binaries"]),
+            "Persistent rule executable no longer matches discovered pinned tools",
+        )
+        validate_rule(rule)
+        policy["network_policies"][rule["id"]] = network_rule(rule)
+    return policy
+
+
+def network_rule(rule):
+    return {
+        "name": rule["id"],
+        "binaries": [{"path": b} for b in rule["binaries"]],
+        "endpoints": [
+            {
+                "host": rule["host"],
+                "port": rule["port"],
+                "protocol": "rest",
+                "enforcement": "enforce",
+                "access": rule["access"],
+            }
+        ],
+    }
+
+
+def verify_tools(data=None):
+    tools = guest("tools")
+    require(
+        tools["uid"] != 0 and tools["version"] == settings()["codex_version"],
+        "Guest UID or Codex version incompatible",
+    )
+    if data:
+        require(
+            tools["binaries"] == data["tools"]["binaries"]
+            and tools["native_sha256"] == data["tools"]["native_sha256"],
+            "Executable identity drift. No policy expanded. Run setup.sh --check",
+        )
+    print("PASS: non-root Git, Python, pytest, Codex and native executable discovery")
+    return tools
+
+
+def login_status(data):
+    result = execute(data["tools"]["launcher"], "login", "status", check=False)
+    # Ignore all output: it may include account identifiers or API-key fragments.
+    print(
+        "PASS: Codex authenticated"
+        if result.returncode == 0
+        else "LOGIN REQUIRED: ./infra/dev-sandbox/start.sh login"
+    )
+    return result.returncode == 0
+
+
+def manifest():
+    names = [
+        line.strip()
+        for line in (HERE / "source-manifest.txt").read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    for name in names:
+        snapshot.validate_path(name)
+        require(
+            re.fullmatch(r"[A-Za-z0-9_./-]+", name) and name.endswith((".py", ".md")),
+            "Phase 2 scope permits plain Python/Markdown source files only",
+        )
+    require(names and len(set(names)) == len(names), "Manifest must be nonempty and unique")
+    return names
+
+
+def current(data):
+    value = data.get("snapshot")
+    require(value is not None, "Repository source missing; run refresh.sh")
+    expected = read(STATE / value["local"] / "snapshot-provenance.json")
+    require(
+        digest(json.dumps(expected, sort_keys=True).encode()) == value["provenance_sha256"],
+        "Host snapshot provenance changed",
+    )
+    require(
+        expected["manifest"] == data.get("scope_manifest", manifest()),
+        "Manifest scope drift; review then refresh",
+    )
+    for row in expected["files"]:
+        path = STATE / value["local"] / row["path"]
+        require(
+            path.resolve() == path.absolute() and digest(path.read_bytes()) == row["sha256"],
+            "Host baseline checksum mismatch",
+        )
+    return value, expected
+
+
+def refresh(data, names=None):
+    # Every refresh uses a new destination; old work is preserved.
+    names = manifest() if names is None else names
+    token = uuid.uuid4().hex
+    local = f"snapshots/{token}/source"
+    safe_dir((STATE / local).parent)
+    provenance = snapshot.export(REPO, "HEAD", names, STATE / local)
+    destination = f"/sandbox/oma-phase2/snapshots/{token}"
+    oshell("sandbox", "upload", "--no-git-ignore", NAME, str(STATE / local), destination)
+    root = destination + "/source"  # CLI preserves the uploaded directory basename.
+    guest("initialize", root=root, provenance=provenance)
+    data["snapshot"] = {
+        "root": root,
+        "local": local,
+        "provenance_sha256": digest(json.dumps(provenance, sort_keys=True).encode()),
+    }
+    data["scope_manifest"] = names
+    data.pop("writable", None)
+    save(STATE / "state.json", data)
+    print(f"PASS: committed snapshot {provenance['commit'][:12]} ready; prior work preserved")
+
+
+def setup(mode):
+    if mode == "dry-run":
+        print("STATUS  CHECK                 FIX / PLAN")
+        for label in (
+            "host tools + permissions",
+            "gateway (reuse or start)",
+            "image (verify or build)",
+            "MicroVM (reuse or create)",
+            "GitHub Provider + gh",
+            "OMA HTTPS clone / safe sync",
+            "Codex login + directory",
+        ):
+            print(f"SKIP    {label}: setup.sh applies this step; no changes in dry-run")
+        return
+    preflight()
+    image_id = image(check=mode != "apply")
+    listing = oshell("sandbox", "list").stdout
+    exists = any(line.split() and line.split()[0] == NAME for line in listing.splitlines())
+    if not exists:
+        require(mode != "check", "Development sandbox missing; run setup.sh")
+        image_ref = "example-dev-phase2:" + image_id.split(":")[1][:12]
+        command(["docker", "tag", image_id, image_ref])
+        empty_policy = base_policy()
+        safe_dir(STATE)
+        save(STATE / "bootstrap-policy.json", empty_policy)
+        oshell(
+            "sandbox",
+            "create",
+            "--name",
+            NAME,
+            "--from",
+            image_ref,
+            "--policy",
+            str(STATE / "bootstrap-policy.json"),
+            "--no-auto-providers",
+            "--approval-mode",
+            "manual",
+            "--label",
+            "oma.phase=2",
+            "--label",
+            "oma.image=" + image_id.split(":")[1][:32],
+            "--detach",
+            "--no-tty",
+            "--",
+            "/bin/sleep",
+            "infinity",
+            timeout=600,
+        )
+    info = api("sandbox", "get", NAME)
+    ready(info)
+    require(
+        info["labels"].get("oma.phase") == "2"
+        and info["labels"].get("oma.image") == image_id.split(":")[1][:32],
+        "Existing resource ownership/image drift; refusing adoption",
+    )
+    if (STATE / "state.json").exists():
+        data = state(allow_config_drift=True)
+        verify_tools(data)
+        github_provider.reconcile(sys.modules[__name__], data, mode)
+    else:
+        require(mode != "check", "Setup incomplete; rerun setup.sh")
+        baseline = base_policy()
+        effective(baseline)  # Adopt only our own deny-all bootstrap sandbox.
+        tools = verify_tools()
+        data = {
+            "sandbox_id": info["id"],
+            "config_hash": config_hash(),
+            "tools": tools,
+            "policy": baseline,
+            "snapshot": None,
+        }
+        save(STATE / "state.json", data)
+    reviewed = policy_for(data["tools"])
+    # Add only absent reviewed default rules. Never replace a policy during setup.
+    for key, rule in reviewed["network_policies"].items():
+        if key in data["policy"]["network_policies"]:
+            require(data["policy"]["network_policies"][key] == rule, "Default rule drift")
+            continue
+        require(mode != "check", "Reviewed rules missing; rerun setup.sh")
+        endpoint = rule["endpoints"][0]
+        change = {"id": key, **endpoint, "binaries": [b["path"] for b in rule["binaries"]]}
+        update(data, change, confirmation=False)
+    effective(data["policy"])
+    print("PASS: reviewed policy Loaded and effective; default deny; manual approval")
+    if mode == "apply":
+        guest("prepare_auth")
+    if not (STATE / "github-ready.json").exists():
+        github_provider.reconcile(sys.modules[__name__], data, mode)
+    synced = sync_checkout(check=mode == "check")
+    if synced["state"] != "active-agent":
+        help_result = execute(
+            *agents.adapter("codex").interactive(data["tools"]["launcher"]),
+            "--help",
+            workdir="/sandbox/oma",
+        )
+        require(
+            "--ask-for-approval" in help_result.stdout and "--sandbox" in help_result.stdout,
+            "Pinned Codex CLI flags unavailable; rerun setup.sh",
+        )
+        print("PASS: Codex launches in /sandbox/oma; requested CLI flags supported (no model call)")
+    else:
+        print("SKIP: Codex directory probe while another agent is active")
+    login_status(data)
+    if mode == "apply":
+        data["config_hash"] = config_hash()
+        save(STATE / "state.json", data)
+    print("PASS: setup checks complete. Start: ./infra/dev-sandbox/start.sh codex")
+
+
+def setup_report(mode):
+    """Keep operator output concise. Never expose native CLI or guest transport logs."""
+    output = io.StringIO()
+    print("STATUS | CHECK | NEXT STEP")
+    try:
+        with redirect_stdout(output), setup_lock(mode):
+            if mode == "apply":
+                bootstrap.host(sys.modules[__name__])
+                print("PASS: Host bootstrap / gateway reuse")
+            setup(mode)
+        require(
+            "LOGIN REQUIRED:" not in output.getvalue(),
+            "Codex login required. Run ./infra/dev-sandbox/start.sh login; retry setup.sh --check.",
+        )
+    finally:
+        for line in output.getvalue().splitlines():
+            status, separator, text = line.partition(": ")
+            if separator and status in {"PASS", "SKIP", "LOGIN REQUIRED"}:
+                state = "FAIL" if status == "LOGIN REQUIRED" else status
+                print(f"{state} | {text} | " + ("start.sh login" if state == "FAIL" else "—"))
+
+
+@contextmanager
+def setup_lock(mode):
+    if mode != "apply":
+        yield
+        return
+    safe_dir(STATE)
+    with (STATE / "operation.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield
+
+
+def task_active():
+    path = STATE / "task.lock"
+    if not path.exists():
+        return False
+    with path.open("r") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+    return False
+
+
+def patch_from_files(baseline, files, scope=None):
+    require(set(files) == set(baseline), "Guest file scope mismatch")
+    chunks = []
+    total = 0
+    for name, original in baseline.items():
+        snapshot.validate_path(name)
+        encoded = files[name]
+        changed = b"" if encoded is None else base64.b64decode(encoded, validate=True)
+        total += len(changed)
+        require(len(changed) <= 1024 * 1024 and total <= MAX_TRANSFER, "Patch size limit")
+        require(b"\0" not in changed, "Binary patch rejected")
+        snapshot.validate_content(name, changed)
+        old, new = original.decode("utf-8"), changed.decode("utf-8")
+        require(not old or old.endswith("\n"), "Baseline needs final newline")
+        require(not new or new.endswith("\n"), "Changed file needs final newline")
+        if original == changed and encoded is not None:
+            continue
+        require(scope is None or name in scope, "Edit outside approved writable task scope")
+        # Generate on host from validated content. Guest-supplied diff headers/commands ignored.
+        chunks.append(f"diff --git a/{name} b/{name}\n")
+        if encoded is None:
+            chunks.append("deleted file mode 100644\n")
+        chunks.extend(
+            difflib.unified_diff(
+                old.splitlines(True),
+                new.splitlines(True),
+                fromfile="a/" + name,
+                tofile="/dev/null" if encoded is None else "b/" + name,
+            )
+        )
+    return "".join(chunks).encode()
+
+
+def export_patch(data):
+    value, provenance = current(data)
+    result = guest("collect", root=value["root"], provenance=provenance)
+    baseline = {
+        name: (STATE / value["local"] / name).read_bytes() for name in provenance["manifest"]
+    }
+    scope = data.get("writable") or [
+        line.strip()
+        for line in (HERE / "edit-scope.txt").read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    require(set(scope).issubset(baseline), "Edit scope must be inside source manifest")
+    patch = patch_from_files(baseline, result["files"], scope)
+    require(patch, "No changes to export")
+    output = STATE / "exports" / uuid.uuid4().hex
+    safe_dir(output)
+    (output / "changes.patch").write_bytes(patch)
+    save(
+        output / "provenance.json",
+        {
+            "snapshot": provenance,
+            "patch_sha256": digest(patch),
+            "sandbox_id": data["sandbox_id"],
+            "policy_revision": effective(data["policy"])["version"],
+            "applied_to_host": False,
+            "review_required": True,
+        },
+    )
+    print("PASS: safe patch exported; no host application")
+    print(f"Review: git apply --stat {output / 'changes.patch'}")
+    print(f"Check: git apply --check {output / 'changes.patch'}")
+    print(f"SHA-256: {digest(patch)}")
+    return output / "changes.patch"
+
+
+DENIAL = re.compile(
+    r"DENIED (?P<binary>/[A-Za-z0-9_@./+-]+)\(\d+\) -> "
+    r"(?P<host>[a-z0-9.-]+):(?P<port>\d+) \[reason:(?P<reason>[a-z0-9_]+)\]"
+)
+
+
+def denials(logs):
+    found = {}
+    for match in DENIAL.finditer(logs):
+        fields = match.groupdict()
+        rule = {
+            "host": fields["host"],
+            "port": int(fields["port"]),
+            "binaries": [fields["binary"]],
+            "access": "full",
+        }
+        rule["id"] = "review_" + digest(json.dumps(rule, sort_keys=True).encode())[:12]
+        validate_rule(rule)
+        found[rule["id"]] = {
+            **rule,
+            "reason": fields["reason"],
+            "method": "unavailable",
+            "path": "unavailable",
+        }
+    return found
+
+
+def pending(data):
+    raw = oshell("logs", NAME, "--source", "sandbox", "-n", "1000").stdout
+    proposals = denials(raw)
+    path = STATE / "inbox.json"
+    inbox = read(path) if path.exists() else {}
+    revision = effective(data["policy"])["version"]
+    for key, proposal in proposals.items():
+        if key not in inbox:
+            inbox[key] = {**proposal, "status": "pending", "observed_revision": revision}
+    save(path, inbox)
+    for key, proposal in inbox.items():
+        if proposal["status"] == "pending":
+            print(json.dumps(proposal, indent=2))
+            print(
+                "Risk: full HTTPS access for this executable can send source and credentials "
+                "to this host. HTTP method/path were unavailable; this is an endpoint grant."
+            )
+            print(f"Approve: ./infra/dev-sandbox/rules.sh approve {key}")
+            print(f"Reject: ./infra/dev-sandbox/rules.sh reject {key}")
+    print(
+        "Compatibility inbox: recent structured TCP denials only; not a native proposal API. "
+        "DNS-only/older denials may have no executable and cannot be approved here."
+    )
+
+
+def update_args(rule):
+    validate_rule(rule)
+    args = [
+        "policy",
+        "update",
+        NAME,
+        "--rule-name",
+        rule["id"],
+        "--add-endpoint",
+        f"{rule['host']}:{rule['port']}:{rule['access']}:rest:enforce",
+    ]
+    for binary in rule["binaries"]:
+        args += ["--binary", binary]
+    return args
+
+
+def confirm(text):
+    require(sys.stdin.isatty(), "Founder confirmation requires a terminal")
+    require(input(f"Type {text} to confirm: ") == text, "Confirmation declined; no change")
+
+
+def record_change(before, after, action, rule):
+    save(
+        STATE / "history" / (str(time.time_ns()) + ".json"),
+        {
+            "action": action,
+            "rule": rule,
+            "before_revision": before["version"],
+            "after_revision": after["version"],
+            "before_hash": before["hash"],
+            "after_hash": after["hash"],
+            "before_policy": before["policy"],
+            "after_policy": after["policy"],
+        },
+    )
+
+
+def journal(data, before, expected, action, rule):
+    require(
+        not (STATE / "pending-change.json").exists(),
+        "Interrupted policy change exists; run rules.sh recover",
+    )
+    save(
+        STATE / "pending-change.json",
+        {
+            "sandbox_id": data.get("sandbox_id"),
+            "before": before,
+            "expected": expected,
+            "action": action,
+            "rule": rule,
+        },
+    )
+
+
+def recover(data):
+    pending = read(STATE / "pending-change.json")
+    require(pending["sandbox_id"] == data["sandbox_id"], "Recovery sandbox identity mismatch")
+    actual = effective()
+    actual_base = github_provider.base_policy(sys.modules[__name__], actual["policy"])
+    before_base = github_provider.base_policy(sys.modules[__name__], pending["before"]["policy"])
+    applied = normalize(actual_base) == normalize(pending["expected"])
+    unchanged = normalize(actual_base) == normalize(before_base)
+    require(applied or unchanged, "Unknown policy drift; recovery cannot adopt external changes")
+    print(
+        json.dumps(
+            {
+                "action": pending["action"],
+                "rule": pending["rule"],
+                "before_revision": pending["before"]["version"],
+                "current_revision": actual["version"],
+                "applied_and_loaded": applied,
+            },
+            indent=2,
+        )
+    )
+    confirm("recover")
+    # Recover local review state only; never send a policy replacement.
+    if applied:
+        data["policy"] = pending["expected"]
+        save(STATE / "state.json", data)
+        inbox_path = STATE / "inbox.json"
+        if inbox_path.exists():
+            inbox = read(inbox_path)
+            identifier = pending["rule"].get("id", pending["rule"].get("name"))
+            if identifier in inbox:
+                inbox[identifier]["status"] = (
+                    "approved" if pending["action"] == "approve" else "rolled_back"
+                )
+                save(inbox_path, inbox)
+    record_change(pending["before"], actual, "recover", pending["rule"])
+    (STATE / "pending-change.json").unlink()
+    print("PASS: exact interrupted change reconciled; no native policy changed")
+
+
+def update(data, rule, confirmation=True):
+    before = effective(data["policy"])
+    require(rule["id"] not in data["policy"]["network_policies"], "Rule already exists")
+    args = update_args(rule)
+    # Suppress native dry-run output, which includes the full policy, then display the narrow delta.
+    oshell(*args, "--dry-run")
+    if confirmation:
+        print(json.dumps(rule, indent=2))
+        print(f"Before revision: {before['version']}. Adds one exact endpoint/executable rule.")
+        print("Risk: HTTPS requests may transmit source or credentials; endpoint-level access.")
+        confirm(rule["id"])
+    require(effective(data["policy"])["version"] == before["version"], "Concurrent policy change")
+    expected = json.loads(json.dumps(data["policy"]))
+    expected["network_policies"][rule["id"]] = network_rule(rule)
+    journal(data, before, expected, "approve", rule)
+    oshell(*args, "--wait")
+    after = effective(expected)
+    record_change(before, after, "approve", rule)
+    data["policy"] = expected
+    save(STATE / "state.json", data)
+    (STATE / "pending-change.json").unlink()
+    print(f"PASS: revision {before['version']} -> {after['version']} Loaded")
+    if rule["id"].startswith("review_"):
+        print(f"Undo: ./infra/dev-sandbox/rules.sh rollback {rule['id']}")
+
+
+def rules(action, identifier):
+    data = state(allow_config_drift=action in {"reconcile", "status", "diagnose"})
+    if action == "recover":
+        recover(data)
+        return
+    if action in {"status", "diagnose"}:
+        try:
+            require(data["config_hash"] == config_hash(), "Reviewed configuration drift")
+            effective(data["policy"])
+        except ValueError as exc:
+            native = api("policy", "get", NAME)
+            revisions = api("policy", "list", NAME)
+            print(
+                json.dumps(
+                    {
+                        "sandbox": NAME,
+                        "verified": False,
+                        "reason": str(exc),
+                        "version": native["version"],
+                        "active_version": native["active_version"],
+                        "revisions": revisions["revisions"],
+                    },
+                    indent=2,
+                )
+            )
+            print(
+                "Interrupted wrapper change: rules.sh recover. Reviewed config change: "
+                "rules.sh reconcile. Unknown drift needs separate policy review."
+            )
+            return
+    before = effective(data["policy"])
+    if action == "reconcile":
+        preflight()
+        image(check=True)
+        verify_tools(data)
+        reviewed = policy_for(data["tools"])
+        for key, rule in reviewed["network_policies"].items():
+            if key in data["policy"]["network_policies"]:
+                require(
+                    data["policy"]["network_policies"][key] == rule,
+                    "Existing default differs; reconcile cannot replace policy",
+                )
+        print(
+            "Accept reviewed phase2.json change; preserves existing effective policy. "
+            "Missing reviewed defaults will be installed by setup.sh."
+        )
+        confirm("reconcile")
+        data["config_hash"] = config_hash()
+        save(STATE / "state.json", data)
+    elif action == "status":
+        print(
+            json.dumps(
+                {
+                    "sandbox": NAME,
+                    "revision": before["version"],
+                    "status": "Loaded",
+                    "hash": before["hash"],
+                    "policy": before["policy"],
+                },
+                indent=2,
+            )
+        )
+    elif action in {"pending", "diagnose"}:
+        pending(data)
+        if action == "diagnose":
+            verify_tools(data)
+            login_status(data)
+            print("For gateway/KVM failures: openshell doctor check; setup.sh --check")
+    elif action == "rollback":
+        require(
+            identifier.startswith("review_") and identifier in data["policy"]["network_policies"],
+            "Rollback removes only a compatibility-approved rule; defaults preserved",
+        )
+        print(json.dumps(data["policy"]["network_policies"][identifier], indent=2))
+        oshell("policy", "update", NAME, "--remove-rule", identifier, "--dry-run")
+        confirm(identifier)
+        require(
+            effective(data["policy"])["version"] == before["version"], "Concurrent policy change"
+        )
+        expected = json.loads(json.dumps(data["policy"]))
+        removed = expected["network_policies"].pop(identifier)
+        journal(data, before, expected, "rollback", removed)
+        oshell("policy", "update", NAME, "--remove-rule", identifier, "--wait")
+        after = effective(expected)
+        record_change(before, after, "rollback", removed)
+        data["policy"] = expected
+        save(STATE / "state.json", data)
+        (STATE / "pending-change.json").unlink()
+        inbox_path = STATE / "inbox.json"
+        if inbox_path.exists():
+            inbox = read(inbox_path)
+            if identifier in inbox:
+                inbox[identifier]["status"] = "rolled_back"
+                save(inbox_path, inbox)
+        print(f"PASS: revision {before['version']} -> {after['version']} Loaded; rule removed")
+    elif action in {"approve", "reject", "persist"}:
+        inbox = read(STATE / "inbox.json")
+        require(identifier in inbox, "Unknown inbox ID; run rules.sh pending")
+        proposal = inbox[identifier]
+        if action == "persist":
+            require(
+                proposal["status"] == "approved", "Approve and review a rule before persistence"
+            )
+            require(len(proposal["binaries"]) == 1, "Persist accepts one exact executable")
+            require(
+                data["policy"]["network_policies"].get(identifier) == network_rule(proposal),
+                "Only the exact currently approved rule can be persisted",
+            )
+            cfg = settings()
+            require(
+                not any(row["id"] == identifier for row in cfg["rules"]),
+                "Persistent rule already exists",
+            )
+            entry = {
+                "id": identifier,
+                "host": proposal["host"],
+                "port": proposal["port"],
+                "access": proposal["access"],
+                "binary": proposal["binaries"][0],
+                "review": "Founder-confirmed compatibility rule; review this configuration in PR",
+            }
+            validate_rule(proposal)
+            print(json.dumps(entry, indent=2))
+            print(
+                "Preview: append this exact approved rule to phase2.json; no native policy change."
+            )
+            confirm(identifier)
+            cfg["rules"].append(entry)
+            save(CONFIG, cfg)
+            print(
+                "PASS: exact rule saved to phase2.json. Review and commit through a PR. "
+                "After merge run rules.sh reconcile, then setup.sh."
+            )
+            return
+        require(proposal["status"] == "pending", "Proposal already resolved")
+        if action == "approve":
+            # Do not accept fabricated executable names from denial logs.
+            require(
+                all(
+                    b in data["tools"]["binaries"] + ["/usr/bin/curl"] for b in proposal["binaries"]
+                ),
+                "Unreviewed executable; separate PR required",
+            )
+            update(data, proposal)
+            proposal["status"] = "approved"
+        else:
+            confirm(identifier)
+            proposal["status"] = "rejected"
+            record_change(before, before, "reject", proposal)
+            print(f"PASS: rejected; revision {before['version']} unchanged; default deny retained")
+        save(STATE / "inbox.json", inbox)
+
+
+def start(action, model=None, base="main"):
+    if action in {"claude", "opencode"}:
+        agents.require_live(action)
+    data = state()
+    if action in {"stop", "resume"}:
+        oshell("sandbox", "stop" if action == "stop" else "start", NAME)
+        print(f"PASS: {action}; workspace preserved. Run setup.sh --check after resume.")
+        return
+    effective(data["policy"])
+    verify_tools(data)
+    require(
+        action == "login" or not task_active(),
+        "Concurrent active agent task. Wait for it to finish, then retry start.sh codex.",
+    )
+    if action == "shell":
+        github_provider.verify(sys.modules[__name__], data)
+        session("launch", argv=["/bin/bash", "--noprofile", "--norc"], base=base, interactive=True)
+    elif action == "login":
+        guest("prepare_auth")
+        print(
+            "Open the displayed official login URL in the host browser. Enter the device code. "
+            "Do not paste codes or credentials into chat/evidence."
+        )
+        execute(data["tools"]["launcher"], "login", "--device-auth", interactive=True)
+        require(login_status(data), "Login incomplete; run rules.sh diagnose")
+    else:
+        require(
+            action in settings()["agents"] and settings()["agents"][action]["enabled"],
+            "Agent adapter not enabled; Claude Code/OpenCode need reviewed pins and policies",
+        )
+        if not login_status(data):
+            start("login")
+        github_provider.verify(sys.modules[__name__], data)
+        session(
+            "launch",
+            argv=agents.require_live(action).interactive(data["tools"]["launcher"], model),
+            base=base,
+            interactive=True,
+        )
+
+
+def main():
+    os.umask(0o077)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "command",
+        choices=["setup", "start", "run", "github", "refresh", "export", "rules", "cleanup"],
+    )
+    parser.add_argument("action", nargs="?", default="")
+    parser.add_argument("id", nargs="?", default="")
+    parser.add_argument("--agent", choices=list(agents.AGENTS))
+    parser.add_argument("--scope", choices=["pilot", "module", "full"], default="pilot")
+    parser.add_argument("--module", action="append", default=[])
+    parser.add_argument("--model")
+    parser.add_argument("--auth-mode", choices=["api", "subscription"], default="api")
+    parser.add_argument("--prompt-file", type=Path)
+    parser.add_argument("--attempts", type=int, default=1)
+    parser.add_argument("--publish", metavar="FEATURE_BRANCH")
+    parser.add_argument("--base-branch", default="main")
+    parser.add_argument("--test-path", action="append", default=[])
+    args = parser.parse_args()
+    try:
+        if args.command == "setup" and args.agent in {"claude", "opencode"}:
+            require(args.action in {"apply", "check", "dry-run"}, "Invalid setup action")
+            workflow.prepare(
+                sys.modules[__name__], args.agent, args.action, args.model, args.auth_mode
+            )
+            return 0
+        if args.command == "start" and args.action in {"claude", "opencode"}:
+            agents.require_live(args.action)
+        if args.command == "run":
+            agents.require_live(args.action)
+        if args.command == "setup":
+            require(args.action in {"apply", "check", "dry-run"}, "Invalid setup action")
+            if args.action == "dry-run":
+                setup("dry-run")
+                return 0
+            require(
+                not os.environ.get("OPENSHELL_SANDBOX"),
+                "This is a MicroVM session. Run the command from the Linux Lite host terminal.",
+            )
+            require(
+                not any(k.startswith("OPENSHELL_") for k in os.environ),
+                "OpenShell environment overrides are not allowed",
+            )
+            setup_report(args.action)
+            return 0
+        require(
+            not any(k.startswith("OPENSHELL_") for k in os.environ),
+            "OpenShell environment overrides are not allowed",
+        )
+        require(shutil.which("openshell"), "Missing dependency: openshell. Install CLI 0.1.2 first")
+        require(
+            oshell("--version").stdout.strip() == settings()["cli_version"], "CLI version drift"
+        )
+        safe_dir(STATE)
+        with (STATE / "operation.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if args.command == "start":
+                require(
+                    args.scope == "pilot" and not args.module,
+                    "Use --autonomous for bounded scopes; interactive startup uses /sandbox/oma.",
+                )
+                if args.action not in {"stop", "resume"}:
+                    # A long session must not block Founder approval/refresh in another terminal.
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+                require(
+                    not args.publish and not args.prompt_file,
+                    "Publication and prompt files require --autonomous",
+                )
+                start(args.action, args.model, args.base_branch)
+            elif args.command == "run":
+                require(args.prompt_file is not None, "run requires --prompt-file")
+                require(args.prompt_file.stat().st_size <= 32768, "Prompt file too large")
+                for path in args.test_path:
+                    snapshot.validate_path(path)
+                    require(re.fullmatch(r"[A-Za-z0-9_./-]+", path), "Invalid test path")
+                tests = ("/usr/bin/python3", "-m", "pytest", "-q")
+                if args.scope == "pilot":
+                    tests += ("--import-mode=prepend",)
+                tests += tuple(args.test_path)
+                result = workflow.run(
+                    sys.modules[__name__],
+                    args.action,
+                    args.prompt_file.read_text(),
+                    args.scope,
+                    args.module,
+                    args.model,
+                    args.attempts,
+                    args.publish,
+                    tests,
+                    release_lock=lambda: fcntl.flock(lock, fcntl.LOCK_UN),
+                    base=args.base_branch,
+                )
+                print(json.dumps(result, indent=2))
+            elif args.command == "github":
+                require(
+                    args.action in {"setup", "check", "credential"},
+                    "Use github.sh setup|check|credential",
+                )
+                preflight()
+                if args.action == "credential":
+                    github_provider.credentials(sys.modules[__name__])
+                    return 0
+                data = state(allow_config_drift=args.action == "setup")
+                github_provider.reconcile(
+                    sys.modules[__name__], data, "apply" if args.action == "setup" else "check"
+                )
+                data["config_hash"] = config_hash()
+                if args.action == "setup":
+                    save(STATE / "state.json", data)
+            elif args.command == "rules":
+                require(
+                    args.action
+                    in {
+                        "status",
+                        "pending",
+                        "approve",
+                        "reject",
+                        "rollback",
+                        "persist",
+                        "diagnose",
+                        "reconcile",
+                        "recover",
+                    },
+                    "Unknown rules action",
+                )
+                rules(args.action, args.id)
+            elif args.command == "cleanup":
+                data = state()
+                print(
+                    "Export work first. Deletes only example-dev-phase2 and its guest credentials/data."
+                )
+                confirm(NAME)
+                oshell("sandbox", "delete", NAME)
+                (STATE / "state.json").rename(STATE / f"retired-{uuid.uuid4().hex}.json")
+                print("PASS: named development VM removed; local exports/history preserved")
+            else:
+                data = state()
+                effective(data["policy"])
+                if args.command == "refresh":
+                    names = workflow.scope_paths(sys.modules[__name__], args.scope, args.module)
+                    refresh(data, names)
+                    data["writable"] = [p for p in names if p.rsplit("/", 1)[-1] != "AGENTS.md"]
+                    if args.scope == "pilot":
+                        data["writable"] = [p for p in names if p.endswith(".py")]
+                    save(STATE / "state.json", data)
+                else:
+                    export_patch(data)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+        # Only controlled errors are exposed; never echo guest/API payloads.
+        message = (
+            str(exc)
+            if isinstance(exc, ValueError) and not isinstance(exc, json.JSONDecodeError)
+            else type(exc).__name__
+        )
+        print(f"FAIL: {message}", file=sys.stderr)
+        if args.command == "setup":
+            print("FAIL | Setup readiness | " + message)
+            print("SKIP | Dependent checks | Resolve the failure above, then retry setup.sh.")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

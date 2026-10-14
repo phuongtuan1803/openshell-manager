@@ -1,0 +1,56 @@
+{
+  "sandbox": "example-dev-phase2",
+  "cli_version": "openshell 0.1.2",
+  "codex_version": "codex-cli 0.162.1",
+  "image": "example-dev-sandbox:openshell-0.1.2",
+  "image_id": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "agents": {
+    "codex": {
+      "enabled": true,
+      "version": "0.162.1",
+      "live_verified": []
+    },
+    "claude": {
+      "enabled": false,
+      "version": "2.1.296",
+      "package": "@anthropic-ai/claude-code",
+      "live_verified": false
+    },
+    "opencode": {
+      "enabled": false,
+      "version": "1.19.0",
+      "package": "opencode-ai",
+      "live_verified": false
+    }
+  },
+  "rules": [
+    {
+      "id": "codex_auth",
+      "host": "auth.openai.com",
+      "port": 443,
+      "access": "full",
+      "agent": "codex",
+      "review": "Example only; project endpoint authorization requires separate review"
+    },
+    {
+      "id": "codex_workspace",
+      "host": "chatgpt.com",
+      "port": 443,
+      "access": "full",
+      "agent": "codex",
+      "review": "Example only; project endpoint authorization requires separate review"
+    },
+    {
+      "id": "github_readonly",
+      "host": "api.github.com",
+      "port": 443,
+      "access": "read-only",
+      "binary": "/usr/bin/curl",
+      "review": "Example only; project endpoint authorization requires separate review"
+    }
+  ],
+  "github": {
+    "provider": "example-github",
+    "repository": "example/project"
+  }
+}

@@ -1,0 +1,3 @@
+# Exact writable task scope. AGENTS.md cannot be exported as an edit.
+infra/dev-sandbox/pilot/calculator.py
+infra/dev-sandbox/pilot/test_calculator.py
