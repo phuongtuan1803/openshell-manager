@@ -750,3 +750,58 @@ def test_setup_resumes_verified_bootstrap_without_creating_sandbox(
     assert control.read(control.STATE / "state.json")["sandbox_id"] == info["id"]
     assert checked == [control.base_policy(), control.base_policy()]
     assert all(args[:2] != ("sandbox", "create") for args in native_calls)
+
+
+def test_provider_reconcile_treats_missing_native_network_rules_as_deny_all(
+    monkeypatch, tmp_path
+):
+    """A fresh OpenShell VM omits network_policies until first provider attach."""
+    provider = control.github_provider
+    monkeypatch.setattr(control, "STATE", tmp_path)
+    monkeypatch.setattr(control, "PROVIDER_PROFILE", tmp_path / "github.yaml")
+    control.PROVIDER_PROFILE.write_text("id: reviewed-only\n")
+    monkeypatch.setattr(provider, "lint", lambda *a: None)
+    monkeypatch.setattr(provider, "profile", lambda *_: {"id": provider.PROVIDER})
+    monkeypatch.setattr(provider, "comparable", lambda _: {})
+    monkeypatch.setattr(provider, "tool", lambda *a, **kw: None)
+    monkeypatch.setattr(provider, "verify", lambda *a: {"ready": True})
+    monkeypatch.setattr(control, "effective", lambda *a, **kw: None)
+    native = []
+
+    def api(*parts):
+        if parts[:3] == ("provider", "profile", "list"):
+            return [{"id": provider.PROVIDER}]
+        if parts[:3] == ("provider", "profile", "describe"):
+            return {"id": provider.PROVIDER}
+        if parts[:2] == ("provider", "list"):
+            return {"providers": [{"name": provider.PROVIDER,
+                                   "type": provider.PROVIDER,
+                                   "credential_keys": ["GITHUB_TOKEN"]}]}
+        if parts[:3] == ("sandbox", "provider", "list"):
+            return {"providers": []}
+        if parts[:2] == ("policy", "get"):
+            return {"policy": {"version": 1, "filesystem_policy": {},
+                               "landlock": {}}}
+        pytest.fail(f"Unexpected native API call: {parts[:2]}")
+
+    monkeypatch.setattr(control, "api", api)
+    monkeypatch.setattr(
+        control, "oshell",
+        lambda *args, **kwargs: native.append(args),
+    )
+    result = provider.reconcile(control, {"policy": control.base_policy()}, mode="apply")
+    assert result["ready"] is True
+    assert any(args[:3] == ("sandbox", "provider", "attach") for args in native)
+    assert not any("delete" in args for args in native)
+
+
+def test_provider_verify_missing_network_rules_fails_closed(monkeypatch):
+    provider = control.github_provider
+    monkeypatch.setattr(
+        control, "oshell",
+        lambda *args: subprocess.CompletedProcess(args, 0, "openshell 0.1.2\n", ""),
+    )
+    monkeypatch.setattr(provider, "tool", lambda *a, **kw: None)
+    monkeypatch.setattr(control, "effective", lambda policy: {"policy": {"version": 1}})
+    with pytest.raises(ValueError, match="GitHub provider not attached"):
+        provider.verify(control, {"policy": control.base_policy()})
