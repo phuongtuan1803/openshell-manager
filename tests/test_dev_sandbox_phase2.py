@@ -875,7 +875,7 @@ def test_migrate_initialized_state_preserves_sandbox_policy_snapshot(
     initialized_revision_migration
 ):
     project, state_dir, cfg, before, after, native_calls = initialized_revision_migration
-    control.migrate_revision(project, None, before)
+    control.migrate_revision(project, None, before, after)
     updated = control.read(state_dir / "state.json")
     assert updated["custom_receipt"] == {"preserve": True}
     assert updated["policy"] == control.base_policy()
@@ -885,7 +885,7 @@ def test_migrate_initialized_state_preserves_sandbox_policy_snapshot(
     assert control.read(state_dir / "project-binding.json")["manager_revision"] == after
     assert native_calls == [("sandbox", "get", "oma-dev")]
     # A retry after a complete migration must not rewrite or reset existing state.
-    control.migrate_revision(project, None, before)
+    control.migrate_revision(project, None, before, after)
     assert control.read(state_dir / "state.json") == updated
     assert native_calls == [("sandbox", "get", "oma-dev")] * 2
 
@@ -893,26 +893,26 @@ def test_migrate_initialized_state_preserves_sandbox_policy_snapshot(
 def test_migrate_initialized_state_rejects_config_drift(
     initialized_revision_migration
 ):
-    project, state_dir, _, before, _, _ = initialized_revision_migration
+    project, state_dir, _, before, after, _ = initialized_revision_migration
     data = control.read(state_dir / "state.json")
     data["config_hash"] = "unreviewed"
     control.save(state_dir / "state.json", data)
     with pytest.raises(ValueError, match="configuration/identity drift"):
-        control.migrate_revision(project, None, before)
+        control.migrate_revision(project, None, before, after)
     assert control.read(project)["manager_revision"] == before
 
 
 def test_migrate_initialized_state_refuses_sandbox_identity_drift(
     initialized_revision_migration, monkeypatch
 ):
-    project, state_dir, _, before, _, _ = initialized_revision_migration
+    project, state_dir, _, before, after, _ = initialized_revision_migration
     monkeypatch.setattr(control, "api", lambda *_: {
         "id": "foreign", "name": "oma-dev", "phase": "Ready",
         "configuration_admission": {"state": "accepted"},
         "labels": {"manager.phase": "2", "manager.project": "oma", "manager.image": "bad"},
     })
     with pytest.raises(ValueError, match="ownership differs"):
-        control.migrate_revision(project, None, before)
+        control.migrate_revision(project, None, before, after)
     assert control.read(project)["manager_revision"] == before
 
 
