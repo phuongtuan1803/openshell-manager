@@ -173,9 +173,40 @@ def test_loaded_revision_with_lagging_active_pointer_converges(native_setup, evi
         lagging[0] = False
     adapter.sleep = converge
     assert adapter.confirm(snapshot, 'approve', receipt)['loaded']
-    assert sleeps == [1] and len(rpc.mutations) == 1
+    assert sleeps == [10] and len(rpc.mutations) == 1
     records = evidence.evidence()
     assert any(r.get('code') == 'active_policy_version' and r['status'] == 'wait' for r in records)
+
+
+def test_confirmation_waits_for_supervisor_policy_poll(native_setup, evidence):
+    _, rpc, adapter, _, _, _, _ = native_setup
+    snapshot = adapter.discover()[0]
+    rpc.delayed_load = True
+    receipt = adapter.approve(snapshot, str(uuid.uuid4()), 1900)
+    original = rpc.call
+    elapsed = [0]
+
+    def call(method, **fields):
+        result = original(method, **fields)
+        if method == 'GetSandbox' and not rpc.loaded:
+            admission = result.sandbox.status.configuration_admission
+            admission.policy_version = snapshot['version']
+            admission.policy_hash = snapshot['policy_hash']
+            admission.config_revision = snapshot['config_revision']
+        return result
+
+    def supervisor_poll(seconds):
+        elapsed[0] += seconds
+        if elapsed[0] >= 10:
+            rpc.loaded = True
+
+    rpc.call = call
+    adapter.sleep = supervisor_poll
+    assert adapter.confirm(snapshot, 'approve', receipt)['loaded']
+    assert 10 <= elapsed[0] <= 30
+    assert len(rpc.mutations) == 1
+    records = evidence.evidence()
+    assert any(r.get('code') == 'admission_policy_revision' and r['status'] == 'wait' for r in records)
 
 
 @pytest.mark.parametrize('unauthorized', [True, False])

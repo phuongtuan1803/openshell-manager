@@ -437,7 +437,10 @@ class NativeAdapter:
                                  status='wait' if error.retryable and attempt + 1 < self.confirmation_attempts else 'fail', **self.correlation)
                 if not error.retryable or attempt + 1 == self.confirmation_attempts:
                     raise
-                self.sleep(1)
+                # v0.1.2's supervisor polls policy every ten seconds. Four
+                # one-second reads can all precede its next poll; allow three
+                # poll intervals while retaining the bounded read count.
+                self.sleep(10)
 
     def _confirm_once(self, snapshot, action, receipt):
         failures = []

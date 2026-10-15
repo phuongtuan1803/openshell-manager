@@ -275,8 +275,11 @@ is compared to the stored policy revision; the candidate effective hash is
 compared to effective configuration. These are different authorities in the
 native API and are not assumed interchangeable.
 
-Confirmation makes at most four read attempts, separated by one second, only
-for classified transient states. Each native RPC retains its 10-second timeout.
+Confirmation makes at most four read attempts, separated by ten seconds, only
+for classified transient states. This provides 30 seconds of waiting for the
+pinned supervisor's [default ten-second policy poll](https://github.com/NVIDIA/OpenShell/blob/6648bd0c290efbc41ba131ee9831ee45cd431f94/crates/openshell-supervisor/src/lib.rs#L1023).
+The previous three-second wait could expire before the next supervisor poll,
+even with a valid approval receipt and candidate policy. Each native RPC retains its 10-second timeout.
 Pending admission/load and known transient transport codes can converge.
 A LOADED revision with a lagging older active version also gets a bounded
 read-only retry: native status reporting persists LOADED before updating the
