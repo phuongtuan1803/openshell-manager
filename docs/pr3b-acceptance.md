@@ -7,10 +7,11 @@ The earlier notification-only implementation was insufficient for the requested
 workflow. This correction implements automatic native discovery and real native
 approval/rejection through the version-specific authenticated Gateway API.
 
-**Status: offline implementation verified; live end-to-end acceptance SKIP.**
-No service was deployed or enabled. No real Telegram/native credential, Gateway,
-active sandbox or paid agent/model call was accessed. Runtime missing/untrusted
-native evidence reports **BLOCKED — end-to-end approval unavailable**, not success.
+**Current status: live end-to-end B15 PENDING (operator hold); offline evidence is historical.**
+The initial offline implementation was not deployed or enabled. Subsequent
+operator-run isolated live tests occurred and are documented in the hold section
+below; none establishes a complete B15 PASS. Runtime missing/untrusted native
+evidence reports **BLOCKED — end-to-end approval unavailable**, not success.
 
 ## Resolved source/API investigation
 
@@ -53,7 +54,7 @@ PASS entries below are **offline source/fixture evidence**, not host/live proof.
 | B12 | PASS | Private 0700/0600 state and existing key files; owner/link checks, numeric identity validation, TLS verification and secret-bearing error suppression. Native rationale/credential values omitted, token-like scope redacted and approval disabled. Bot credentials never enter RPCs/guest arguments/public artifacts. Disclosure scan required below. |
 | B13 | PASS | Existing host-wide poller lock and operation lock reused, cooperative bounded stop, signal/DB cleanup, explicit service template/lifecycle. Native Gateway selection bound; no installer/setup auto enable. gRPC native sockets explicitly blocked in offline test guards. |
 | B14 | PASS | Full inherited offline suite and packaging/resource regression checks required below. PR3a provenance/source guards and native/model/tool pins unchanged. Added exact Python grpcio/protobuf dependencies for the host adapter; artifact/installed dependency checks updated. |
-| B15 | SKIP | No separately authorized isolated native sandbox/Telegram host acceptance ran. No live sandbox UUID/revision, actual agent retry trace or production deployment evidence exists. No paid model calls. |
+| B15 | **PENDING** | Operator-run isolated live attempts produced partial native/Telegram and cleanup evidence, an intentional SIGINT and a create exit-1 blocker; no complete Approve/Reject/LOADED/HTTP verification PASS. Operator requested a hold. See the final hold section. |
 
 ## Verification commands and evidence
 
