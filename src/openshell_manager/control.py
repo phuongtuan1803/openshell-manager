@@ -646,7 +646,7 @@ def refresh(data, names=None):
     print(f"PASS: committed snapshot {provenance['commit'][:12]} ready; prior work preserved")
 
 
-def migrate_revision(project, host, previous_revision):
+def migrate_revision(project, host, previous_revision, expected_revision):
     """Explicit state-preserving migration between verified immutable Manager revisions.
 
     No sandbox, provider, policy, credential or workspace mutations occur here.
@@ -654,8 +654,7 @@ def migrate_revision(project, host, previous_revision):
     from . import configuration
 
     require(provenance.sha(previous_revision), "Invalid previous Manager revision")
-    target_revision, _ = provenance.identity()
-    provenance.verify(target_revision)
+    target_revision = provenance.verify(expected_revision)
     require(previous_revision != target_revision, "Manager already pinned to this revision")
     cfg = configuration.load(project, host)
     require(cfg["manager_revision"] in {previous_revision, target_revision},
@@ -1416,6 +1415,7 @@ def main(argv=None):
     parser.add_argument("--project", type=Path, default=os.environ.get("MANAGER_PROJECT"))
     parser.add_argument("--host", type=Path, default=os.environ.get("MANAGER_HOST"))
     parser.add_argument("--from-revision")
+    parser.add_argument("--to-revision")
     parser.add_argument("--base-branch")
     parser.add_argument("--test-path", action="append", default=[])
     args = parser.parse_args(argv)
@@ -1424,9 +1424,10 @@ def main(argv=None):
         require(not any(k.startswith("OPENSHELL_") for k in os.environ),
                 "OpenShell environment overrides are not allowed")
         if args.command == "migrate":
-            require(args.action == "revision" and args.from_revision is not None,
-                    "Use migrate revision --from-revision FULL_OLD_SHA")
-            migrate_revision(args.project, args.host, args.from_revision)
+            require(args.action == "revision" and args.from_revision is not None
+                    and args.to_revision is not None,
+                    "Use migrate revision --from-revision OLD_SHA --to-revision NEW_SHA")
+            migrate_revision(args.project, args.host, args.from_revision, args.to_revision)
             return 0
         install_dependencies = args.command == "setup" and args.action == "apply" and args.agent not in {"claude", "opencode"}
         if args.command == "setup":
