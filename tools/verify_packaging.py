@@ -88,7 +88,7 @@ def smoke(wheel):
         version = run([executable, 'version']).stdout
         assert 'installed Git: ' + pin in version, version
         python = base / 'tools/openshell-manager/bin/python'
-        resource_probe = 'from importlib.resources import files; import hashlib,json; r=files("openshell_manager"); print(json.dumps({str(p.relative_to(r)): hashlib.sha256(p.read_bytes()).hexdigest() for p in r.rglob("*") if p.is_file() and ("resources" in p.parts or p.name in {"guest.py","session.py","validate_guest.py"})}))'
+        resource_probe = 'from importlib.resources import files; import hashlib,json; r=files("openshell_manager"); print(json.dumps({str(p.relative_to(r)): hashlib.sha256(p.read_bytes()).hexdigest() for p in r.rglob("*") if p.is_file() and ("resources" in p.parts or p.name in {"guest.py","session.py","validate_guest.py","agent_guest.py"})}))'
         installed_hashes = json.loads(run([python, '-c', resource_probe]).stdout)
         for source, expected in MANIFEST.items():
             name = Path(source).name if source.startswith('src/') else 'resources/' + source
@@ -128,6 +128,8 @@ def smoke(wheel):
         assert 'SKIP' in run([executable, 'setup', '--dry-run', *options]).stdout
         assert not sentinel.exists()
         assert (base / 'state/fixture/project-binding.json').exists()
+        assert 'approve-network' in run([executable, 'agent', '--help']).stdout
+        assert 'Supply --project' in run([executable, 'agent', 'status', '--agent', 'claude'], expected=1).stderr
         approval_help = run([executable, 'approval', '--help']).stdout
         assert 'approval' in approval_help and 'test' in approval_help
         # Help for the real-run command remains harmless in the installed artifact.

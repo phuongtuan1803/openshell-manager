@@ -6,6 +6,12 @@ from . import control, provenance
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == 'agent':
+        from . import installed_agents
+        return installed_agents.main(argv[1:])
+    if len(argv) >= 2 and argv[0] == 'start' and argv[1] in {'claude', 'opencode'}:
+        from . import installed_agents
+        return installed_agents.main(['start', '--agent', argv[1], *argv[2:]])
     if argv and argv[0] == 'approval':
         from .approval import service
         return service.main(argv[1:])
