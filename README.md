@@ -64,3 +64,14 @@ pins remain OpenShell 0.1.2, Codex 0.162.1, Claude Code 2.1.296, OpenCode
 See [migration notes](docs/migration/pr2-configuration.md) and the
 [extraction/Telegram plan](docs/plans/openshell-extraction-and-telegram-approval.md).
 Telegram Approval is a later implementation step, not part of this reorganization.
+
+Telegram Approval P1 automatically discovers exact OpenShell v0.1.2 network-rule
+proposals through an existing authenticated local Gateway. Supported requests
+provide **Approve rule**, **Reject** and **Details**, with native result/load
+confirmation, private SQLite audit and fail-closed recovery. Compatibility notices
+remain read-only fallback. See the [operator runbook](docs/runbooks/telegram-approval-p1.md),
+[one-command live test](docs/runbooks/telegram-approval-test.md) (`openshell-manager approval test`),
+[manual first real run](docs/runbooks/telegram-approval-live.md),
+[versioned native API evidence](docs/native-api-v0.1.2.md) and
+[acceptance report](docs/pr3b-acceptance.md). Live acceptance is not yet verified;
+package installation never starts or enables the optional user service.

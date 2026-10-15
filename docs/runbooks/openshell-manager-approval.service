@@ -1,0 +1,16 @@
+# Operator template: replace all absolute paths before explicitly enabling.
+[Unit]
+Description=OpenShell Manager Telegram native network-rule approvals
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/ABSOLUTE/PATH/openshell-manager approval serve --project /PRIVATE/PATH/project.json --host /PRIVATE/PATH/host.json --bot-config /PRIVATE/PATH/telegram.json --gateway EXISTING_LOCAL_GATEWAY --gateway-workspace default
+Restart=on-failure
+RestartSec=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

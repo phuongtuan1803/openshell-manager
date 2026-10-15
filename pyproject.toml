@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Project-scoped OpenShell sandbox manager"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["PyYAML==6.0.3"]
+dependencies = ["PyYAML==6.0.3", "grpcio==1.76.0", "protobuf==6.33.6"]
 
 [project.scripts]
 openshell-manager = "openshell_manager.cli:main"
@@ -20,4 +20,4 @@ dev = ["pytest==8.4.2"]
 packages = ["src/openshell_manager"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/src", "/scripts", "/tests", "/tools/verify_packaging.py", "/docs", "/README.md", "/pyproject.toml", "/uv.lock", "/pytest.ini"]
+include = ["/src", "/scripts", "/tests", "/tools/verify_packaging.py", "/tools/generate_approval_schema.py", "/docs", "/README.md", "/pyproject.toml", "/uv.lock", "/pytest.ini"]

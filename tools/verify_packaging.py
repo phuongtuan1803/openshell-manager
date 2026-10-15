@@ -33,7 +33,7 @@ def inventory():
                     else 'openshell_manager/resources/' + source)
         assert hashlib.sha256(wheel_files[packaged]).hexdigest() == expected, packaged
         assert wheel_files[packaged] == sdist_files['src/' + packaged], packaged
-    modules = {str(p.relative_to(REPO / 'src')) for p in (REPO / 'src/openshell_manager').glob('*.py')}
+    modules = {str(p.relative_to(REPO / 'src')) for p in (REPO / 'src/openshell_manager').rglob('*.py')}
     resources = {('openshell_manager/resources/' + n) for n in MANIFEST if not n.startswith('src/')}
     assert {n for n in wheel_files if '.dist-info/' not in n} == modules | resources
     # Explicit public sdist boundary: no profiles from the host/project, state, logs, or reference tree.
@@ -95,6 +95,8 @@ def smoke(wheel):
             assert installed_hashes[name] == expected, name
         dependencies = run([python, '-c', 'import importlib.metadata as m; print(m.version("PyYAML"))']).stdout.strip()
         assert dependencies == '6.0.3', dependencies
+        native_dependencies = json.loads(run([python, '-c', 'import importlib.metadata as m,json; print(json.dumps({n:m.version(n) for n in ("grpcio","protobuf")}))']).stdout)
+        assert native_dependencies == {'grpcio': '1.76.0', 'protobuf': '6.33.6'}
         project = base / 'project'
         project.mkdir()
         git(project, 'init', '-q')
@@ -126,6 +128,17 @@ def smoke(wheel):
         assert 'SKIP' in run([executable, 'setup', '--dry-run', *options]).stdout
         assert not sentinel.exists()
         assert (base / 'state/fixture/project-binding.json').exists()
+        approval_help = run([executable, 'approval', '--help']).stdout
+        assert 'approval' in approval_help and 'test' in approval_help
+        # Help for the real-run command remains harmless in the installed artifact.
+        assert 'test' in run([executable, 'approval', 'test', '--help']).stdout
+        assert 'test' in run([python, '-I', '-m', 'openshell_manager', 'approval', 'test', '--help']).stdout
+        assert 'disabled' in run([executable, 'approval', 'status', *options]).stdout
+        assert 'disabled' in run([executable, 'approval', 'pending', *options]).stdout
+        assert not (base / 'state/fixture/approval').exists()
+        run([executable, 'approval', 'serve', *options], expected=1)  # no private bot credentials
+        run([executable, 'approval', 'stop', *options], expected=1)  # no bridge state to stop
+        assert not sentinel.exists()
         hidden_source.rename(fixture)
         # Source wrappers exercise the same handlers and exit codes; only development diagnostics differ.
         assert 'SKIP' in run(['bash', fixture / 'scripts/setup.sh', '--dry-run', *options]).stdout

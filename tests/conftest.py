@@ -31,6 +31,10 @@ def offline_host(monkeypatch, tmp_path_factory):
     monkeypatch.setattr(socket.socket, "connect", no_network)
     monkeypatch.setattr(socket.socket, "connect_ex", no_network)
     monkeypatch.setattr(urllib.request, "urlopen", no_network)
+    # gRPC uses native sockets that bypass Python socket guards.
+    import grpc
+    monkeypatch.setattr(grpc, "secure_channel", no_network)
+    monkeypatch.setattr(grpc, "insecure_channel", no_network)
     popen = subprocess.Popen
 
     def local_git_only(argv, *args, **kwargs):

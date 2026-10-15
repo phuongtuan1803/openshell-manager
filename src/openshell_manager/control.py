@@ -119,8 +119,9 @@ def read(path):
 
 
 def command(args, *, check=True, interactive=False, timeout=120):
+    from .approval import diagnostics
     # Never print arbitrary stdout/stderr: CLI/guest logs can contain auth material.
-    result = subprocess.run(
+    result = diagnostics.command(subprocess.run,
         args, text=True, capture_output=not interactive, check=False, timeout=timeout
     )
     if check and result.returncode:

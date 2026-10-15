@@ -1,0 +1,106 @@
+"""Minimal outbound Bot API; errors never include URLs, responses or credentials."""
+import json
+import time
+
+from . import diagnostics
+from datetime import datetime, timezone
+import re
+import urllib.request
+
+from .store import private
+from .. import configuration
+from ..control import require
+
+
+class TelegramError(ValueError):
+    pass
+
+
+def credentials(path):
+    private(path)
+    try:
+        value = configuration.file(path)
+        require(set(value) == {'bot_token', 'user_id', 'chat_id'}, 'Invalid private bot configuration')
+        require(isinstance(value['bot_token'], str) and
+                re.fullmatch(r'[0-9]{5,20}:[A-Za-z0-9_-]{20,100}', value['bot_token']), 'Invalid bot token format')
+        require(type(value['user_id']) is int and value['user_id'] > 0
+                and type(value['chat_id']) is int and value['chat_id'] != 0, 'Numeric user/chat IDs required')
+        return value
+    except (ValueError, TypeError, KeyError):
+        raise ValueError('Invalid private bot configuration') from None
+
+
+class Telegram:
+    def __init__(self, token, transport=None):
+        self._token = token
+        self._transport = transport or urllib.request.urlopen
+
+    def call(self, method, **payload):
+        require(method in {'getUpdates', 'sendMessage', 'answerCallbackQuery', 'editMessageText', 'getMe', 'getWebhookInfo'}, 'Unsupported Telegram method')
+        started = time.monotonic()
+        diagnostics.emit('telegram', 'delivery_start', method=method.lower(), deadline_seconds=35)
+        try:
+            request = urllib.request.Request('https://api.telegram.org/bot' + self._token + '/' + method,
+                                             data=json.dumps(payload).encode(),
+                                             headers={'Content-Type': 'application/json'})
+            # No redirects: a token-bearing URL must never reach another host.
+            transport = self._transport
+            if transport is urllib.request.urlopen:
+                class NoRedirect(urllib.request.HTTPRedirectHandler):
+                    def redirect_request(self, *args, **kwargs):
+                        return None
+                transport = urllib.request.build_opener(NoRedirect).open
+            with transport(request, timeout=35) as response:
+                result = json.loads(response.read(1024 * 1024))
+            if result.get('ok') is not True or 'result' not in result:
+                raise TelegramError('Telegram unavailable')
+            diagnostics.emit('telegram', 'delivery_end', method=method.lower(), status='pass',
+                             duration_ms=(time.monotonic() - started) * 1000)
+            return result['result']
+        except Exception:
+            diagnostics.emit('telegram', 'delivery_end', method=method.lower(), status='unknown', code='telegram_transport_or_response',
+                             duration_ms=(time.monotonic() - started) * 1000)
+            raise TelegramError('Telegram unavailable; no permission changed') from None
+
+    def notify(self, chat, sandbox, row, token):
+        if row['kind'] == 'native':
+            return self.notify_native(chat, row, token)
+        scope = json.loads(row['scope'])
+        text = (f'Manual review only — {sandbox}\n'
+                f"Denied endpoint: {scope['host']}:{scope['port']} ({scope['binary']})\n"
+                'Native proposal identity, method/path and risk checks unavailable.\n'
+                'Risk: endpoint access may expose source or credentials. No permission can be granted here.\n'
+                'Details expires 15 minutes after observation. Review native proposals on the host.')
+        result = self.call('sendMessage', chat_id=chat, text=text,
+                           link_preview_options={'is_disabled': True},
+                           reply_markup={'inline_keyboard': [[{'text': 'Details', 'callback_data': token}]]})
+        require(isinstance(result, dict) and type(result.get('message_id')) is int, 'Invalid Telegram message identity')
+        return result['message_id']
+
+    def notify_native(self, chat, row, tokens):
+        snapshot = json.loads(row['snapshot'])
+        expiry = datetime.fromtimestamp(row['expires'], timezone.utc).isoformat()
+        text = (f"Project: {snapshot['project']} / Sandbox: {snapshot['sandbox']}\n"
+                f"Native proposal: {snapshot['chunk_id']}\n"
+                f"Sandbox ID: {snapshot['sandbox_id']}\n"
+                f"Risk: {snapshot['risk']}\n"
+                'Data risk: this executable can send data to the requested destination.\n'
+                f"Complete requested network rule:\n{snapshot['scope']}\n"
+                f"Effective policy: {snapshot['policy_hash']}\n"
+                f"Expires: {expiry} (15-minute review TTL).\n"
+                'Approve rule adds a runtime network rule; it is not one-time permission.')
+        buttons = []
+        if 'approve' in tokens:
+            buttons.append({'text': 'Approve rule', 'callback_data': tokens['approve']})
+        buttons += [{'text': 'Reject', 'callback_data': tokens['reject']},
+                    {'text': 'Details', 'callback_data': tokens['details']}]
+        require(len(text) <= 3900, 'Native notice too large; manual review required')
+        result = self.call('sendMessage', chat_id=chat, text=text, link_preview_options={'is_disabled': True},
+                           reply_markup={'inline_keyboard': [buttons]})
+        require(isinstance(result, dict) and type(result.get('message_id')) is int, 'Invalid Telegram message identity')
+        return result['message_id']
+
+    def status(self, chat, row, result):
+        self.call('editMessageText', chat_id=chat, message_id=row['message'],
+                  text=f"Native proposal {json.loads(row['snapshot'])['chunk_id']}: {result}",
+                  reply_markup={'inline_keyboard': []})

@@ -6,6 +6,9 @@ from . import control, provenance
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == 'approval':
+        from .approval import service
+        return service.main(argv[1:])
     if argv == ['version']:
         print('openshell-manager 0.1.0')
         try:
