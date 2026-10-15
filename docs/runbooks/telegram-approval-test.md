@@ -10,7 +10,8 @@ No project files, environment exports, second terminal, manual sandbox setup or
 proposal IDs are needed. The command creates a fresh isolated fixture and test
 sandbox, starts the existing approval bridge as a child, submits real native
 proposals and verifies the decisions. It does not call an AI model or enable a
-system service. **This procedure has offline test coverage; live B15 is still SKIP.**
+system service. Offline coverage and the supplied partial live observations are
+described below; neither establishes a complete live acceptance pass.
 
 On first use, create a dedicated bot through BotFather if necessary. The command
 asks for the token with echo disabled, then asks you to send the displayed
@@ -203,9 +204,9 @@ historical observations, not a promise that later state remained unchanged.
 | `provider_revision_attachment` | Missing provider-state revision/attachment epoch, even for zero providers. Stop; check pinned native API compatibility without adding credentials/providers. |
 | `admission_instance`, `admission_policy_revision`, `admission_config_revision`, `admission_provider_revision` | Supervisor observation differs from current desired configuration. Bounded 120-second convergence; a timeout reports the specific mismatch. Investigate supervisor configuration loading, not a broader permission grant. |
 | `filesystem_guard`, `landlock_guard`, `process_guard`, `middleware_guard` | Effective static authority differs from the reviewed bootstrap. Fail immediately. Never reconcile by weakening the guard. |
-| `loaded_schema`, `loaded_policy_revision` | Unsupported policy-status data, pending revision, or failed/superseded load. Pending loads may converge; explicit failed/superseded loads fail immediately. |
+| `loaded_schema`, `loaded_schema_hash`, `loaded_revision_version`, `loaded_state`, `active_policy_version` | Schema/hash shape, revision identity, LOADED state and active revision are reported separately. Pending loads may converge; failed/superseded loads fail immediately. |
 | `manual_approval_mode`, `deny_all_network` | AUTO/unsupported mode or unexpected bootstrap network rules. Stop; no test proposal may be submitted. |
-| `rpc_METHOD_STATUS`, `rpc_METHOD_precondition`, `native_unclassified` | Named native read/transport failure. UNAVAILABLE/deadline/resource exhaustion/aborted may converge; authentication/permission/precondition failures stop. An unclassified error fails closed without raw exception disclosure. |
+| `rpc_method_status`, `rpc_method_precondition`, `native_unclassified` | Fixed lowercase native read/transport codes. UNAVAILABLE/deadline/resource exhaustion/aborted may converge; authentication/permission/precondition failures stop. An unclassified error fails closed without raw exception disclosure. |
 
 The bootstrap explicitly sets `process.run_as_user` and `process.run_as_group`
 to `sandbox` **before creation**. OpenShell v0.1.2's policy parser preserves an
@@ -221,3 +222,97 @@ Pinned source evidence:
 [canonicalization preserves process omission](https://github.com/NVIDIA/OpenShell/blob/6648bd0c290efbc41ba131ee9831ee45cd431f94/crates/openshell-policy/src/lib.rs#L1872),
 [create validates and persists the supplied policy](https://github.com/NVIDIA/OpenShell/blob/6648bd0c290efbc41ba131ee9831ee45cd431f94/crates/openshell-server/src/grpc/sandbox.rs#L531),
 [provider revision hashes even an empty record set](https://github.com/NVIDIA/OpenShell/blob/6648bd0c290efbc41ba131ee9831ee45cd431f94/crates/openshell-server/src/grpc/policy.rs#L2970).
+
+## Persistent per-run evidence
+
+Diagnostics begin before preflight, at
+`~/.local/state/openshell-manager/approval-live/<random-run-id>/`. Directories
+must be owned by the host user and mode 0700; files are created at 0600.
+Symlinks, hard links and permissive existing modes are refused. The parent and
+managed bridge append to the same files under a process-shared lock:
+
+| Artifact | Evidence |
+| --- | --- |
+| `events.jsonl` | Preflight revision/runtime pins, image verification/cache reuse, step start/end, monotonic waits/deadlines, signals and child exits |
+| `native.jsonl` | RPC names/correlation/status/latency, mutation intent, receipt observations, every reached confirmation predicate and unexecuted predicates marked `not_evaluated` |
+| `telegram.jsonl` | Notice/message correlation, delivery status, user/chat/message match booleans, selected action, decision outcome/latency |
+| `sandbox.jsonl` | Creation intent, verified UUID ownership, Ready, sandbox-local setting, cleanup start/end and orphan warnings |
+| `commands.jsonl` | Allowlisted executable/operation, exit code, timeout/deadline/duration and fixed error category |
+| `result.json` | Ownership intent, workflow outcome/checks, failing stage/invariant, mutation/receipt/grant/cleanup facts and `confirmed` / `suspected` / `unknown` conclusions |
+| `facts.json` | Bounded sticky mutation/receipt/grant observations and last failure; survives stream rotation |
+
+Events have UTC timestamps, unique stable event IDs, monotonic elapsed times and
+a shared run reference. Native sandbox/proposal, Telegram message and decision
+IDs are hashed before recording; the decision reference joins the local UUID to
+the mutation RPC correlation. IDs never substitute for native identity checks.
+Commands never record arguments, process environments, stdout or stderr. Logs
+never record bot/callback/review tokens, raw updates, certificates/keys, policy
+or proposal bodies, credentials, native rationale or guest output. Fields are
+admitted by an explicit typed allowlist before serialization.
+
+Each stream is capped at 1 MiB with one 1 MiB rotated predecessor. Before native
+mutation, after each response, and before cleanup, the event is flushed and
+fsynced. Critical facts and final results use private atomic writes plus file
+and directory fsync. Cleanup can continue if diagnostic storage becomes
+unwritable; this reports a final diagnostic-write failure. Diagnostics survive
+test failure, Ctrl-C and successful sandbox deletion.
+
+Under the single-test lock, subsequent runs retain at most the newest 20 runs'
+diagnostic files for 30 days. Expiration removes only diagnostic artifacts;
+other fixture/state files are untouched. An unconfirmed sandbox's ownership
+`result.json` is retained for separately authorized investigation. This exception
+prevents retention from deleting the evidence needed to identify an orphan.
+Runtime artifacts remain outside the checkout; do not upload or commit them.
+
+## Confirmation and supplied live observations
+
+Approval confirmation distinguishes the RPC returning a receipt from the
+supervisor admitting the desired configuration and the exact policy revision
+becoming LOADED/active. Identity, creation time, review binding, risk hash,
+rule name/bytes, provider revision, effective candidate hash, receipt revision/hash,
+LOADED state and active revision have separate fixed codes. The receipt hash
+is compared to the stored policy revision; the candidate effective hash is
+compared to effective configuration. These are different authorities in the
+native API and are not assumed interchangeable.
+
+Confirmation makes at most four read attempts, separated by one second, only
+for classified transient states. Each native RPC retains its 10-second timeout.
+Pending admission/load and known transient transport codes can converge.
+A LOADED revision with a lagging older active version also gets a bounded
+read-only retry: native status reporting persists LOADED before updating the
+sandbox's active pointer. A newer active version is drift. Permanent identity,
+rule, provider or hash drift stops immediately, even when a load is simultaneously pending. Unexecuted predicates are explicitly marked;
+they are not evidence of a pass. If the RPC response is lost, receipt predicates
+are `unknown`; independent exact native reads may still establish the outcome.
+No approval or rejection RPC is repeated. Crash/uncertainty reconciliation has
+at most four additional read-only cycles per request, durably counted in the
+existing queue; a permanent mismatch disables further reconciliation. The
+original receipt is retained separately from final confirmation data.
+
+Failure output includes the failing stage and sanitized invariant/RPC code,
+mutation attempted, receipt received, possible runtime grant, confirmed owned
+sandbox cleanup and the private diagnostic directory. A receipt proves receipt
+of the native response; it alone does not prove LOADED or agent access.
+
+The supplied Run 1 observations **confirm** native admission/initialization,
+an approval callback, `native_approve_claimed` → `native_needs_review`, an existing
+90-byte `native_result`, and successful owned cleanup. Read-only inspection of existing private queues found matching approval-failure
+records: their 90-byte JSON receipt has exactly `version` and `hash`, version 2
+against reviewed version 1, with receipt hash equal to the reviewed candidate
+and different from the previous policy. No raw receipt, identifiers or tokens
+are reproduced here. The failed confirmation predicate was not retained.
+Policy convergence is **suspected**: the old confirmation stopped at the first
+unmet admission/load predicate, and native status reporting can expose LOADED
+before the active version advances. The exact failed predicate and whether
+runtime access became available remain **unknown**; no Run 1 root cause is asserted. The supplied Run 2 rejection
+completed successfully after the operator deliberately chose Reject; this
+change preserves rejection checks and does not claim a rejection-path defect.
+
+Pinned source supports the separation: approval returns the stored merge
+revision/hash after updating chunk status
+([bulk approval implementation](https://github.com/NVIDIA/OpenShell/blob/6648bd0c290efbc41ba131ee9831ee45cd431f94/crates/openshell-server/src/grpc/policy.rs#L5774));
+effective configuration reports its effective policy hash
+([configuration response](https://github.com/NVIDIA/OpenShell/blob/6648bd0c290efbc41ba131ee9831ee45cd431f94/crates/openshell-server/src/grpc/policy.rs#L3506)).
+[Status reporting writes LOADED before the active version](https://github.com/NVIDIA/OpenShell/blob/6648bd0c290efbc41ba131ee9831ee45cd431f94/crates/openshell-server/src/grpc/policy.rs#L4609)
+and [status reads the active pointer separately](https://github.com/NVIDIA/OpenShell/blob/6648bd0c290efbc41ba131ee9831ee45cd431f94/crates/openshell-server/src/grpc/policy.rs#L4256).
+The new synthetic tests exercise these transitions; no live test was rerun.

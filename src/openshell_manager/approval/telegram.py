@@ -1,5 +1,8 @@
 """Minimal outbound Bot API; errors never include URLs, responses or credentials."""
 import json
+import time
+
+from . import diagnostics
 from datetime import datetime, timezone
 import re
 import urllib.request
@@ -34,6 +37,8 @@ class Telegram:
 
     def call(self, method, **payload):
         require(method in {'getUpdates', 'sendMessage', 'answerCallbackQuery', 'editMessageText', 'getMe', 'getWebhookInfo'}, 'Unsupported Telegram method')
+        started = time.monotonic()
+        diagnostics.emit('telegram', 'delivery_start', method=method.lower(), deadline_seconds=35)
         try:
             request = urllib.request.Request('https://api.telegram.org/bot' + self._token + '/' + method,
                                              data=json.dumps(payload).encode(),
@@ -49,8 +54,12 @@ class Telegram:
                 result = json.loads(response.read(1024 * 1024))
             if result.get('ok') is not True or 'result' not in result:
                 raise TelegramError('Telegram unavailable')
+            diagnostics.emit('telegram', 'delivery_end', method=method.lower(), status='pass',
+                             duration_ms=(time.monotonic() - started) * 1000)
             return result['result']
         except Exception:
+            diagnostics.emit('telegram', 'delivery_end', method=method.lower(), status='unknown', code='telegram_transport_or_response',
+                             duration_ms=(time.monotonic() - started) * 1000)
             raise TelegramError('Telegram unavailable; no permission changed') from None
 
     def notify(self, chat, sandbox, row, token):

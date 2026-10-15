@@ -22,7 +22,8 @@ def sha(value):
 
 
 def git(root, *args):
-    result = subprocess.run(['git', '-C', str(root), *args], capture_output=True,
+    from .approval import diagnostics
+    result = diagnostics.command(subprocess.run, ['git', '-C', str(root), *args], capture_output=True,
                             text=True, check=False, timeout=10)
     if result.returncode:
         raise ValueError('Cannot verify Manager development checkout')

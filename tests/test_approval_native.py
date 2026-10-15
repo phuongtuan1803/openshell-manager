@@ -131,7 +131,7 @@ def setup(tmp_path):
                    'landlock':{'compatibility':'hard_requirement'}}}))
     (root / 'state.json').chmod(0o600)
     rpc = RPC()
-    adapter = native.NativeAdapter(cfg, rpc, clock=lambda: now[0])
+    adapter = native.NativeAdapter(cfg, rpc, clock=lambda: now[0], sleep=lambda seconds: None)
     store = Store(root / 'approval', 'native-fixture', clock=lambda: now[0])
     bot = Bot()
     bridge = service.Bridge(cfg, {'user_id':34,'chat_id':12}, store, bot, adapter)
@@ -590,7 +590,7 @@ def test_existing_discovered_codex_binary_binding_and_drift(setup):
     ('process', 'process_guard', False), ('landlock', 'landlock_guard', False),
     ('filesystem', 'filesystem_guard', False), ('mode', 'manual_approval_mode', False),
     ('provider', 'provider_revision_attachment', False), ('config', 'config_revision', False),
-    ('load', 'loaded_policy_revision', True), ('rejected', 'native_admission', False),
+    ('load', 'loaded_state', True), ('rejected', 'native_admission', False),
 ])
 def test_context_reports_exact_sanitized_invariant(setup, field, code, retryable):
     cfg, rpc, adapter, *_ = setup

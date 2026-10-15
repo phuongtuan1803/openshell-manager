@@ -18,7 +18,7 @@ import grpc
 from google.protobuf.json_format import MessageToDict
 
 from .. import configuration, control
-from . import schema
+from . import schema, diagnostics
 from .store import private
 
 BLOCKER = 'BLOCKED — native interface unavailable; Telegram cannot grant permissions. Manual host review required.'
@@ -101,50 +101,86 @@ class GatewayRPC:
                     and fields.get('include_security_flagged') is False
                     and set(approvals[0]) == {'chunk_id', 'review_token'})
         request, response = schema.METHODS[method]
+        started, rpc_ref = time.monotonic(), diagnostics.reference(uuid.uuid4())
+        diagnostics.emit('native', 'transport_start', method=method.lower(), rpc_ref=rpc_ref, deadline_seconds=10)
         try:
             invoke = self.channel.unary_unary('/openshell.v1.OpenShell/' + method,
                 request_serializer=lambda value: value.SerializeToString(deterministic=True),
                 response_deserializer=response.FromString)
-            return invoke(request(**fields), timeout=10, wait_for_ready=False)
+            result = invoke(request(**fields), timeout=10, wait_for_ready=False)
+            diagnostics.emit('native', 'transport_response', method=method.lower(), rpc_ref=rpc_ref,
+                             status='pass', code='ok', duration_ms=(time.monotonic() - started) * 1000)
+            return result
         except grpc.RpcError as error:
+            diagnostics.emit('native', 'transport_response', method=method.lower(), rpc_ref=rpc_ref,
+                             status='fail', code='rpc_' + method.lower() + '_' + error.code().name.lower(),
+                             duration_ms=(time.monotonic() - started) * 1000)
             if error.code() == grpc.StatusCode.FAILED_PRECONDITION:
                 raise NativeStale('Native precondition refused; fresh review required') from None
-            raise NativeVerification('rpc_' + method + '_' + error.code().name.lower(),
+            raise NativeVerification('rpc_' + method.lower() + '_' + error.code().name.lower(),
                 error.code() in {grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED,
                                  grpc.StatusCode.RESOURCE_EXHAUSTED, grpc.StatusCode.ABORTED}) from None
         except Exception:
+            diagnostics.emit('native', 'transport_response', method=method.lower(), rpc_ref=rpc_ref,
+                             status='unknown', code='native_transport_unknown',
+                             duration_ms=(time.monotonic() - started) * 1000)
             raise NativeUnavailable(BLOCKER) from None
 
 
 class NativeAdapter:
-    def __init__(self, cfg=None, rpc=None, workspace='default', clock=time.time):
+    def __init__(self, cfg=None, rpc=None, workspace='default', clock=time.time, confirmation_attempts=4, sleep=time.sleep):
+        checked(type(confirmation_attempts) is int and 1 <= confirmation_attempts <= 4)
+        self.confirmation_attempts, self.sleep = confirmation_attempts, sleep
+        self.correlation = {}
         self.cfg, self.rpc, self.workspace, self.clock = cfg, rpc, workspace, clock
         checked(re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}', workspace))
 
     def call(self, method, **fields):
         checked(self.rpc is not None and self.cfg is not None)
-        return self.rpc.call(method, **fields)
+        started = time.monotonic()
+        ref = diagnostics.reference(fields.get('request_id') or uuid.uuid4())
+        mutation = method in {'ApproveAllDraftChunks', 'RejectDraftChunk'}
+        diagnostics.emit('native', 'rpc_start', method=method.lower(), rpc_ref=ref,
+                         mutation_attempted=mutation, grant_possible=method == 'ApproveAllDraftChunks',
+                         **self.correlation)
+        try:
+            response = self.rpc.call(method, **fields)
+        except NativeUnavailable as error:
+            diagnostics.emit('native', 'rpc_response', method=method.lower(), rpc_ref=ref,
+                             status='unknown' if mutation else 'fail',
+                             code=getattr(error, 'code', 'rpc_' + method.lower() + '_failed_precondition' if isinstance(error, NativeStale) else 'native_transport_unknown'),
+                             duration_ms=(time.monotonic() - started) * 1000, **self.correlation)
+            raise
+        diagnostics.emit('native', 'rpc_response', method=method.lower(), rpc_ref=ref, status='pass',
+                         code='ok', duration_ms=(time.monotonic() - started) * 1000,
+                         **self.correlation)
+        return response
 
     @property
     def selector(self):
         return {'workspace': self.workspace}
 
-    def context(self, checkpoint=None):
+    def context(self, checkpoint=None, transient=None):
         def check(code, condition, retryable=False):
+            diagnostics.emit('native', 'predicate', code=code, status='pass' if condition else 'wait' if retryable else 'fail', **self.correlation)
             if checkpoint:
                 checkpoint(code, 'pass' if condition else 'wait' if retryable else 'fail')
             if not condition:
-                raise NativeVerification(code, retryable)
+                if transient is not None and retryable:
+                    transient.append(NativeVerification(code, True))
+                else:
+                    raise NativeVerification(code, retryable)
 
         def read(method, **fields):
             try:
                 return self.call(method, **fields)
             except NativeVerification as error:
-                check(error.code, False, error.retryable)
+                diagnostics.emit('native', 'predicate', code=error.code, status='wait' if error.retryable else 'fail', **self.correlation)
+                raise
             except NativeStale:
-                check('rpc_' + method + '_precondition', False)
+                raise NativeVerification('rpc_' + method.lower() + '_precondition') from None
             except NativeUnavailable:
-                check('rpc_' + method, False, True)
+                raise NativeVerification('rpc_' + method.lower() + '_unknown') from None
 
         health = read('Health')
         check('gateway_version', health.version == '0.1.2')
@@ -173,11 +209,13 @@ class NativeAdapter:
         check('sandbox_ready', resource.status.phase == 2, resource.status.phase in {0, 1})
         config = read('GetSandboxConfig', name=self.cfg['sandbox'], workspace_scope=self.selector)
         check('config_schema', no_unknown(config) and config.HasField('policy'))
-        check('config_admitted', config.configuration_admitted)
+        check('config_admitted', config.configuration_admitted, transient is not None)
         check('policy_source', config.workspace == self.workspace and config.policy_source == 1
                 and config.global_policy_version == 0)
         check('config_revision', config.config_revision > 0 and bool(re.fullmatch(r'[a-f0-9]{64}', config.policy_hash)))
         check('provider_revision_attachment', config.provider_env_revision > 0 and bool(config.provider_attachment_epoch))
+        diagnostics.emit('native', 'configuration_observed', version=config.version, policy_hash=config.policy_hash,
+                         provider_revision=config.provider_env_revision, **self.correlation)
         admission = resource.status.configuration_admission
         check('native_admission', admission.state == 2, admission.state in {0, 1})
         check('admission_instance', bool(config.configuration_instance_id)
@@ -197,9 +235,14 @@ class NativeAdapter:
         check('middleware_guard', not config.policy.network_middlewares)
         loaded = read('GetSandboxPolicyStatus', sandbox=self.cfg['sandbox'], workspace_scope=self.selector, version=config.version)
         check('loaded_schema', no_unknown(loaded))
-        check('loaded_policy_revision', loaded.revision.version == config.version and loaded.revision.status == 2
-                and loaded.active_version == config.version and bool(re.fullmatch(r'[a-f0-9]{64}', loaded.revision.policy_hash)),
-                loaded.revision.status in {0, 1, 2})
+        diagnostics.emit('native', 'load_observed', version=loaded.revision.version, active_version=loaded.active_version,
+                         status={0: 'unspecified', 1: 'pending', 2: 'loaded', 3: 'failed', 4: 'superseded'}.get(loaded.revision.status, 'unknown'),
+                         **self.correlation)
+        check('loaded_schema_hash', bool(re.fullmatch(r'[a-f0-9]{64}', loaded.revision.policy_hash)))
+        check('loaded_revision_version', loaded.revision.version == config.version)
+        check('loaded_state', loaded.revision.status == 2, loaded.revision.status in {0, 1})
+        check('active_policy_version', loaded.active_version == config.version,
+              loaded.revision.status in {0, 1, 2} and loaded.active_version < config.version)
         mode = config.settings.get('proposal_approval_mode')
         check('manual_approval_mode', mode is not None and (not mode.value.WhichOneof('value') or mode.value.string_value == 'manual'))
         return config, {'gateway': getattr(self.rpc, 'identity', 'fixture'), 'project': self.cfg['id'],
@@ -212,6 +255,7 @@ class NativeAdapter:
             'policy_hash': config.policy_hash, 'policy_bytes_hash': hashlib.sha256(config.policy.SerializeToString(deterministic=True)).hexdigest()}
 
     def discover(self):
+        self.correlation = {}
         config, before = self.context()
         result = self.call('GetDraftPolicy', sandbox=self.cfg['sandbox'], workspace_scope=self.selector, status_filter='pending')
         _, after = self.context()
@@ -339,6 +383,9 @@ class NativeAdapter:
     def decide(self, snapshot, action, request_id, expires_at):
         checked(action in {'approve', 'reject'} and str(uuid.UUID(request_id)) == request_id)
         self.verify(snapshot)
+        self.correlation = {'sandbox_ref': diagnostics.reference(snapshot['sandbox_id']),
+                            'proposal_ref': diagnostics.reference(snapshot['chunk_id']),
+                            'decision_ref': diagnostics.reference(request_id)}
         if self.clock() >= expires_at:
             raise NativeStale('Review expired before native dispatch')
         if action == 'approve':
@@ -349,9 +396,14 @@ class NativeAdapter:
                 include_security_flagged=False, request_id=request_id)
             if result.chunks_approved == 0 and result.chunks_skipped == 1 and result.policy_version == 0 and not result.policy_hash:
                 raise NativeStale('Native proposal skipped; no grant applied. Fresh review required')
-            checked(result.chunks_approved == 1 and result.chunks_skipped == 0 and result.policy_version > 0
-                    and re.fullmatch(r'[a-f0-9]{64}', result.policy_hash))
+            valid = bool(result.chunks_approved == 1 and result.chunks_skipped == 0 and result.policy_version > 0
+                         and re.fullmatch(r'[a-f0-9]{64}', result.policy_hash))
+            diagnostics.emit('native', 'predicate', code='approval_receipt_shape', status='pass' if valid else 'fail', **self.correlation)
+            if not valid:
+                raise NativeVerification('approval_receipt_shape')
             receipt = {'version': result.policy_version, 'hash': result.policy_hash}
+            diagnostics.emit('native', 'approval_receipt', receipt_received=True, receipt_version=result.policy_version,
+                             receipt_hash=result.policy_hash, receipt_bytes=len(result.SerializeToString()), **self.correlation)
         else:
             self.call('RejectDraftChunk', sandbox=snapshot['sandbox'], workspace_scope=self.selector,
                 chunk_id=snapshot['chunk_id'], reason='Rejected by the authorized project operator via Telegram; submit a narrower network rule.',
@@ -360,30 +412,91 @@ class NativeAdapter:
         return receipt
 
     def confirm(self, snapshot, action, receipt=None):
-        config, context = self.context()
-        checked(all(context[k] == snapshot[k] for k in ('gateway', 'project', 'manager_revision', 'sandbox', 'sandbox_id', 'workspace', 'instance', 'attachment')))
+        """Bounded reads only. Drift and unclassified transport errors never retry."""
+        self.correlation.update(sandbox_ref=diagnostics.reference(snapshot['sandbox_id']),
+                                proposal_ref=diagnostics.reference(snapshot['chunk_id']))
+        predicates = ('proposal_schema', 'proposal_identity_unique', 'proposal_status', 'proposal_rule_equality',
+                      'proposal_created_identity', 'proposal_rule_name', 'proposal_review_identity', 'proposal_risk_hash',
+                      'provider_revision', 'candidate_policy_hash', 'candidate_policy_version', 'active_rule_present',
+                      'active_rule_equality', 'confirmation_loaded_schema', 'receipt_version', 'receipt_hash',
+                      'receipt_config_version', 'confirmation_revision_version', 'confirmation_loaded_state',
+                      'confirmation_active_version')
+        for attempt in range(self.confirmation_attempts):
+            self._confirmation_observed = set()
+            diagnostics.emit('native', 'confirmation_start', retry=attempt, action=action, **self.correlation)
+            try:
+                return self._confirm_once(snapshot, action, receipt)
+            except NativeUnavailable as error:
+                for predicate in predicates:
+                    if predicate not in self._confirmation_observed:
+                        diagnostics.emit('native', 'predicate', code=predicate, status='not_evaluated', **self.correlation)
+                if not isinstance(error, NativeVerification):
+                    diagnostics.emit('native', 'confirmation_end', status='unknown', code='native_outcome_unknown', **self.correlation)
+                    raise
+                diagnostics.emit('native', 'confirmation_end', retry=attempt, code=error.code, retryable=error.retryable,
+                                 status='wait' if error.retryable and attempt + 1 < self.confirmation_attempts else 'fail', **self.correlation)
+                if not error.retryable or attempt + 1 == self.confirmation_attempts:
+                    raise
+                self.sleep(1)
+
+    def _confirm_once(self, snapshot, action, receipt):
+        failures = []
+        def check(code, condition, retryable=False):
+            self._confirmation_observed.add(code)
+            diagnostics.emit('native', 'predicate', code=code,
+                             status='unknown' if condition is None else 'pass' if condition else 'wait' if retryable else 'fail', **self.correlation)
+            if condition is False:
+                failures.append(NativeVerification(code, retryable))
+
+        config, context = self.context(transient=failures)
+        for key in ('gateway', 'project', 'manager_revision', 'sandbox', 'sandbox_id', 'workspace', 'instance', 'attachment'):
+            check('confirmation_identity_' + key, context[key] == snapshot[key])
         result = self.call('GetDraftPolicy', sandbox=snapshot['sandbox'], workspace_scope=self.selector, status_filter='')
         matches = [c for c in result.chunks if c.id == snapshot['chunk_id']]
-        checked(len(matches) == 1 and no_unknown(result))
+        check('proposal_schema', no_unknown(result))
+        check('proposal_identity_unique', len(matches) == 1)
+        if len(matches) != 1:
+            raise NativeVerification('proposal_identity_unique')
         chunk = matches[0]
-        checked(chunk.status == ('approved' if action == 'approve' else 'rejected')
-                and wire(chunk.proposed_rule) == snapshot['rule'] and wire(chunk.created_time) == snapshot['created']
-                and chunk.rule_name == snapshot['rule_name'] and chunk.review_token == snapshot['review_token']
-                and digest({'security': chunk.security_notes, 'validation': chunk.validation_result,
-                            'application': chunk.application_error}) == snapshot['risk_hash'])
+        check('proposal_status', chunk.status == ('approved' if action == 'approve' else 'rejected'),
+              chunk.status == 'pending' and receipt is not None)
+        check('proposal_rule_equality', wire(chunk.proposed_rule) == snapshot['rule'])
+        check('proposal_created_identity', wire(chunk.created_time) == snapshot['created'])
+        check('proposal_rule_name', chunk.rule_name == snapshot['rule_name'])
+        check('proposal_review_identity', chunk.review_token == snapshot['review_token'])
+        check('proposal_risk_hash', digest({'security': chunk.security_notes, 'validation': chunk.validation_result,
+                                         'application': chunk.application_error}) == snapshot['risk_hash'])
+        check('provider_revision', context['provider_revision'] == snapshot['provider_revision'])
         if action == 'approve':
-            checked(context['provider_revision'] == snapshot['provider_revision']
-                    and config.policy_hash == snapshot['candidate_hash']
-                    and snapshot['rule_name'] in config.policy.network_policies)
+            check('candidate_policy_hash', config.policy_hash == snapshot['candidate_hash'],
+                  receipt is not None and config.policy_hash == snapshot['policy_hash'] and config.version == snapshot['version'])
+            check('candidate_policy_version', config.version > snapshot['version'],
+                  receipt is not None and config.version == snapshot['version'])
+            rule_present = snapshot['rule_name'] in config.policy.network_policies
+            check('active_rule_present', rule_present, receipt is not None and config.version == snapshot['version'])
+            check('active_rule_equality', rule_present and wire(config.policy.network_policies[snapshot['rule_name']]) == snapshot['rule'],
+                  not rule_present and receipt is not None and config.version == snapshot['version'])
             status = self.call('GetSandboxPolicyStatus', sandbox=snapshot['sandbox'], workspace_scope=self.selector,
-                               version=config.version)
-            checked(status.revision.version == config.version
-                    and (receipt is None or (status.revision.version == receipt['version'] and status.revision.policy_hash == receipt['hash']))
-                    and status.revision.status == 2 and status.active_version == config.version
-                    and wire(config.policy.network_policies.get(snapshot['rule_name'])) == snapshot['rule'])
+                               version=receipt['version'] if receipt else config.version)
+            check('confirmation_loaded_schema', no_unknown(status))
+            check('receipt_version', status.revision.version == receipt['version'] if receipt else None)
+            check('receipt_hash', status.revision.policy_hash == receipt['hash'] if receipt else None)
+            check('receipt_config_version', receipt is None or config.version == receipt['version'],
+                  receipt is not None and config.version == snapshot['version'])
+            check('confirmation_revision_version', status.revision.version == config.version,
+                  receipt is not None and config.version == snapshot['version'])
+            check('confirmation_loaded_state', status.revision.status == 2, status.revision.status in {0, 1})
+            check('confirmation_active_version', status.active_version == status.revision.version,
+                  status.revision.status in {0, 1, 2} and status.active_version < status.revision.version)
         else:
-            checked(context['policy_hash'] == snapshot['policy_hash'] and context['provider_revision'] == snapshot['provider_revision']
-                    and context['config_revision'] == snapshot['config_revision'] and chunk.rejection_reason)
+            check('rejection_policy_hash', context['policy_hash'] == snapshot['policy_hash'])
+            check('rejection_config_revision', context['config_revision'] == snapshot['config_revision'])
+            check('rejection_reason_present', bool(chunk.rejection_reason))
+        if failures:
+            # Permanent drift wins over simultaneously observed convergence.
+            raise next((error for error in failures if not error.retryable), failures[0])
+        diagnostics.emit('native', 'confirmation_end', action=action, status='pass', version=config.version,
+                         policy_hash=context['policy_hash'], **self.correlation)
         return {'status': chunk.status, 'policy_hash': context['policy_hash'], 'version': context['version'],
                 'loaded': action == 'approve'}
 

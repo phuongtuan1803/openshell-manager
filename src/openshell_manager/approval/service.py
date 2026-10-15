@@ -8,12 +8,14 @@ import signal
 import sqlite3
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
 from .. import configuration, control, provenance
+from . import diagnostics
 from .compatibility import notifications
-from .native import BLOCKER, GatewayRPC, NativeAdapter, NativeUnavailable, NativeStale
+from .native import BLOCKER, GatewayRPC, NativeAdapter, NativeUnavailable, NativeStale, NativeVerification
 from .store import Store, private
 from .telegram import Telegram, TelegramError, credentials
 
@@ -92,13 +94,17 @@ class Bridge:
             token = self.store.claim_notice(row['id'])
             if token is None:
                 continue
+            refs = self.refs(row)
+            diagnostics.emit('telegram', 'notification_start', **refs)
             try:
                 message = self.telegram.notify(self.auth['chat_id'], self.cfg['sandbox'], row, token)
                 self.store.sent(row['id'], message)
+                diagnostics.emit('telegram', 'notification_end', status='pass', message_ref=diagnostics.reference(message), **refs)
                 sent += 1
             except (TelegramError, ValueError):
                 # The HTTP result could be lost after delivery. Never send blindly twice.
                 self.store.uncertain(row['id'])
+                diagnostics.emit('telegram', 'notification_end', status='unknown', code='delivery_uncertain', **refs)
                 raise TelegramError('Telegram delivery uncertain; inspect approval pending') from None
 
 
@@ -127,15 +133,26 @@ class Bridge:
             finally:
                 fcntl.flock(lock, fcntl.LOCK_UN)
 
+    def refs(self, row):
+        fields = {'message_ref': diagnostics.reference(row['message'])} if row['message'] is not None else {}
+        if row['kind'] == 'native':
+            snapshot = json.loads(row['snapshot'])
+            fields.update(sandbox_ref=diagnostics.reference(snapshot['sandbox_id']),
+                          proposal_ref=diagnostics.reference(snapshot['chunk_id']))
+        return fields
+
     def native_callback(self, callback, message, actor):
         if self.stopping():
             return 'Bridge stopping; no action attempted'
         row = self.store.resolve(callback.get('data'), message.get('message_id'))
         if row is None or row['kind'] != 'native':
+            diagnostics.emit('telegram', 'callback_refused', code='invalid_callback', status='fail')
             return 'Invalid callback'
         if row['expires'] <= self.store.clock():
+            diagnostics.emit('telegram', 'callback_refused', code='expired_callback', status='fail', **self.refs(row))
             return 'Request expired; wait for a fresh native review notification'
         if row['processed'] is not None or row['status'] != 'notified':
+            diagnostics.emit('telegram', 'callback_refused', code='stale_callback', status='fail', **self.refs(row))
             return 'Already processed or stale; no action repeated'
         if self.native is None:
             return BLOCKER
@@ -154,16 +171,27 @@ class Bridge:
                 operation = self.store.claim_decision(row, actor)
                 if operation is None:
                     return 'Already processed or expired; no action repeated'
+                diagnostics.emit('telegram', 'decision_claimed', action=row['callback_action'],
+                                 decision_ref=diagnostics.reference(operation), **self.refs(row))
+                started = time.monotonic()
                 try:
                     receipt = self.native.decide(snapshot, row['callback_action'], operation, row['expires'])
-                    self.store.db.execute('UPDATE requests SET native_result=? WHERE id=?', (json.dumps(receipt), row['id']))
+                    self.store.db.execute('UPDATE requests SET native_result=?,native_receipt=? WHERE id=?',
+                                          (json.dumps(receipt), json.dumps(receipt), row['id']))
                     result = self.native.confirm(snapshot, row['callback_action'], receipt)
                 except NativeStale:
                     self.store.finish(row['id'], 'stale')
                     return 'Native refused stale review; no grant confirmed. Fresh review required.'
-                except NativeUnavailable:
+                except NativeUnavailable as error:
+                    code = getattr(error, 'code', 'native_outcome_unknown')
+                    self.store.db.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',
+                        ('confirmation_error_' + str(row['id']), json.dumps({'code': code, 'permanent': isinstance(error, NativeVerification) and not error.retryable})))
+                    diagnostics.emit('telegram', 'decision_end', status='unknown', code=code,
+                                     duration_ms=(time.monotonic() - started) * 1000, **self.refs(row))
                     self.store.finish(row['id'], 'needs_review')
                     return 'Native outcome unconfirmed; needs host review. No automatic retry.'
+                diagnostics.emit('telegram', 'decision_end', status='pass', action=row['callback_action'],
+                                 duration_ms=(time.monotonic() - started) * 1000, **self.refs(row))
                 self.store.finish(row['id'], result['status'], result)
                 text = 'Approved and loaded by OpenShell; agent may retry.' if result['status'] == 'approved' else 'Rejected by OpenShell; agent may submit a narrower proposal.'
                 self.announce_result(row, text)
@@ -180,11 +208,23 @@ class Bridge:
                 return
             if row['kind'] != 'native' or row['status'] not in {'applying', 'needs_review'} or not row['action']:
                 continue
+            previous = self.store.db.execute('SELECT value FROM metadata WHERE key=?', ('confirmation_error_' + str(row['id']),)).fetchone()
+            if previous and json.loads(previous[0])['permanent']:
+                continue
+            key = 'confirmation_reads_' + str(row['id'])
+            reads = self.store.db.execute('SELECT value FROM metadata WHERE key=?', (key,)).fetchone()
+            count = int(reads[0]) if reads else 0
+            if count >= 4:
+                continue
+            self.store.db.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)', (key, str(count + 1)))
             try:
                 # Read-only reconciliation. request_id is never replayed to a mutation.
                 result = self.native.confirm(json.loads(row['snapshot']), row['action'],
-                                             json.loads(row['native_result']) if row['native_result'] else None)
-            except NativeUnavailable:
+                                             json.loads(row['native_receipt'] or row['native_result']) if row['native_receipt'] or row['native_result'] else None)
+            except NativeUnavailable as error:
+                if isinstance(error, NativeVerification) and not error.retryable:
+                    self.store.db.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',
+                        ('confirmation_error_' + str(row['id']), json.dumps({'code': error.code, 'permanent': True})))
                 if row['status'] == 'applying':
                     self.store.finish(row['id'], 'needs_review')
                 continue
@@ -211,13 +251,19 @@ class Bridge:
             authorized = (isinstance(sender, dict) and type(sender.get('id')) is int
                           and sender['id'] == self.auth['user_id'] and isinstance(chat, dict)
                           and type(chat.get('id')) is int and chat['id'] == self.auth['chat_id'])
+            diagnostics.emit('telegram', 'callback_received', user_match=isinstance(sender, dict) and type(sender.get('id')) is int and sender['id'] == self.auth['user_id'],
+                             chat_match=isinstance(chat, dict) and type(chat.get('id')) is int and chat['id'] == self.auth['chat_id'])
             if authorized:
                 row = self.store.resolve(callback.get('data'), message.get('message_id'))
+                diagnostics.emit('telegram', 'callback_resolved', message_match=row is not None,
+                                 action=row['callback_action'] if row is not None and row['kind'] == 'native' else 'invalid',
+                                 **(self.refs(row) if row is not None else {}))
                 if row is not None and row['kind'] == 'native':
                     result = self.native_callback(callback, message, sender['id'])
                 else:
                     result = self.store.callback(callback.get('data'), message.get('message_id'))
             else:
+                diagnostics.emit('telegram', 'callback_refused', code='unauthorized_callback', status='fail')
                 result = 'Unauthorized; no permission changed'
             callback_id = callback.get('id')
             if isinstance(callback_id, str) and len(callback_id) <= 256:
@@ -257,7 +303,10 @@ def serve(cfg, auth, project, host, gateway=None, workspace="default"):
         else:
             native = None
         shutdown = threading.Event()
-        previous = {sig: signal.signal(sig, lambda *args: shutdown.set()) for sig in (signal.SIGINT, signal.SIGTERM)}
+        def stop_signal(signum, frame):
+            diagnostics.emit('events', 'signal_received', code='sigint' if signum == signal.SIGINT else 'sigterm')
+            shutdown.set()
+        previous = {sig: signal.signal(sig, stop_signal) for sig in (signal.SIGINT, signal.SIGTERM)}
         try:
             store.recover(native=native is not None)
             stopping = lambda: shutdown.is_set() or stop.exists()
@@ -301,6 +350,7 @@ def main(argv):
     parser.add_argument('--host', type=Path, default=os.environ.get('MANAGER_HOST'))
     parser.add_argument('--gateway', help='Existing local authenticated mTLS Gateway name; enables native discovery')
     parser.add_argument('--gateway-workspace', default='default', help='Exact native workspace name')
+    parser.add_argument('--diagnostic-directory', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--bot-config', type=Path, help='Private host JSON; needed only for serve')
     args = parser.parse_args(argv)
     os.umask(0o077)
@@ -316,6 +366,8 @@ def main(argv):
             print('Use a dedicated bot and a private 0600 host JSON with bot_token, user_id and chat_id.')
             print('Serve requires --bot-config. Service activation is an explicit operator step.')
             return 0
+        if args.diagnostic_directory is not None:
+            diagnostics.ACTIVE = diagnostics.Diagnostics(args.diagnostic_directory)
         cfg = admission(args.project, args.host)
         directory = cfg['state'] / 'approval'
         if args.action == 'serve':
@@ -351,6 +403,7 @@ def main(argv):
                         print(json.dumps(item))
         return 0
     except (ValueError, OSError, sqlite3.Error):
+        diagnostics.soft_emit('events', 'bridge_failed', stage='bridge', status='fail', code='bridge_configuration_or_transport')
         # Never expose exception strings from credential or network-bearing operations.
         print('FAIL: approval operation refused; check private paths, project pin/binding and runbook', file=sys.stderr)
         return 1

@@ -59,7 +59,7 @@ class Store:
         for name, declaration in {'kind': "TEXT NOT NULL DEFAULT 'compatibility'", 'snapshot': 'TEXT',
                 'native_identity': 'TEXT', 'generation': 'INTEGER NOT NULL DEFAULT 0',
                 'action': 'TEXT', 'operation_id': 'TEXT', 'decision_user': 'INTEGER',
-                'native_result': 'TEXT', 'status_sent': 'INTEGER NOT NULL DEFAULT 0'}.items():
+                'native_result': 'TEXT', 'native_receipt': 'TEXT', 'status_sent': 'INTEGER NOT NULL DEFAULT 0'}.items():
             if name not in columns:
                 self.db.execute(f'ALTER TABLE requests ADD COLUMN {name} {declaration}')
         audit_columns = {row[1] for row in self.db.execute('PRAGMA table_info(audit)')}
