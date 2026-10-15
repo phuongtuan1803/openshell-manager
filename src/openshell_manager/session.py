@@ -44,8 +44,10 @@ def environment(source=None):
     # A stateless helper passes the native Provider placeholder through a private
     # pipe. Git constructs the same Basic header already accepted by OpenShell.
     # Config inspection exposes only helper code, never the credential or header.
+    # OpenShell supplies its proxy trust bundle through GIT_SSL_CAINFO. Keep
+    # that path while removing inherited Git config, tracing and TLS bypasses.
     for key in list(env):
-        if key.startswith(("GIT_", "GCM_")):
+        if key.startswith(("GIT_", "GCM_")) and key != "GIT_SSL_CAINFO":
             del env[key]
     values = [
         ("credential.helper", ""),
