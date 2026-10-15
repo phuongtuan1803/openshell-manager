@@ -390,6 +390,7 @@ def test_launcher_uses_requested_permissions_only_inside_guest(monkeypatch):
     monkeypatch.setattr(control, "current", lambda _: ({"root": "/source"}, {}))
     monkeypatch.setattr(control, "guest", lambda *args, **kwargs: {})
     monkeypatch.setattr(control, "login_status", lambda _: True)
+    monkeypatch.setattr(control, "require_codex_network", lambda *_: True)
     monkeypatch.setattr(control.github_provider, "verify", lambda *a: {})
     calls = []
     monkeypatch.setattr(control, "session", lambda action, **kwargs: calls.append((action, kwargs)))
