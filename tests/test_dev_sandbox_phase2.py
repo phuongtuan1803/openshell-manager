@@ -805,3 +805,118 @@ def test_provider_verify_missing_network_rules_fails_closed(monkeypatch):
     monkeypatch.setattr(control, "effective", lambda policy: {"policy": {"version": 1}})
     with pytest.raises(ValueError, match="GitHub provider not attached"):
         provider.verify(control, {"policy": control.base_policy()})
+
+
+@pytest.fixture
+def initialized_revision_migration(monkeypatch, tmp_path):
+    from openshell_manager import configuration, provenance
+
+    before, after = "a" * 40, "b" * 40
+    project = tmp_path / "project.json"
+    scope = tmp_path / "source-manifest.txt"
+    edit = tmp_path / "edit-scope.txt"
+    scope.write_text("AGENTS.md\n")
+    edit.write_text("task.py\n")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    cfg = {
+        "id": "oma",
+        "root": str(tmp_path / "oma"),
+        "repository": "phuongtuan1803/one-man-agency",
+        "sandbox": "oma-dev",
+        "workspace": "/sandbox/oma/checkout",
+        "manager_revision": before,
+        "image_id": "sha256:" + "a" * 64,
+        "source_manifest": scope,
+        "edit_scope": edit,
+        "state": state_dir,
+        "codex_version": "0.162.1",
+        "cli_version": "openshell 0.1.2",
+        "agents": {},
+        "rules": [],
+        "github": {"repository": "phuongtuan1803/one-man-agency", "provider": "oma-github"},
+    }
+    control.save(project, {"id": "oma", "manager_revision": before})
+    keys = ("id", "root", "repository", "sandbox", "workspace", "manager_revision")
+    control.save(state_dir / "project-binding.json", {key: str(cfg[key]) for key in keys})
+    control.save(state_dir / "bootstrap-policy.json", control.base_policy())
+    old_hash = control.digest(
+        json.dumps(cfg, sort_keys=True, default=str).encode()
+        + scope.read_bytes() + edit.read_bytes()
+    )
+    control.save(state_dir / "state.json", {
+        "sandbox_id": "11d945ec-15a5-460b-b58c-7c32e8468a83",
+        "config_hash": old_hash,
+        "policy": control.base_policy(),
+        "snapshot": None,
+        "custom_receipt": {"preserve": True},
+    })
+    monkeypatch.setattr(configuration, "load", lambda path, host: cfg)
+    monkeypatch.setattr(provenance, "identity", lambda: (after, "installed Git"))
+    monkeypatch.setattr(provenance, "verify", lambda pin: pin)
+    api_calls = []
+    def read_native(*args):
+        api_calls.append(args)
+        return {
+            "id": "11d945ec-15a5-460b-b58c-7c32e8468a83",
+            "name": "oma-dev",
+            "phase": "Ready",
+            "configuration_admission": {"state": "accepted"},
+            "labels": {
+                "manager.phase": "2", "manager.project": "oma",
+                "manager.image": cfg["image_id"][7:39],
+            },
+        }
+    monkeypatch.setattr(control, "api", read_native)
+    return project, state_dir, cfg, before, after, api_calls
+
+
+def test_migrate_initialized_state_preserves_sandbox_policy_snapshot(
+    initialized_revision_migration
+):
+    project, state_dir, cfg, before, after, native_calls = initialized_revision_migration
+    control.migrate_revision(project, None, before)
+    updated = control.read(state_dir / "state.json")
+    assert updated["custom_receipt"] == {"preserve": True}
+    assert updated["policy"] == control.base_policy()
+    assert updated["snapshot"] is None
+    assert updated["config_hash"] != control.digest(b"garbage")
+    assert control.read(project)["manager_revision"] == after
+    assert control.read(state_dir / "project-binding.json")["manager_revision"] == after
+    assert native_calls == [("sandbox", "get", "oma-dev")]
+    # A retry after a complete migration must not rewrite or reset existing state.
+    control.migrate_revision(project, None, before)
+    assert control.read(state_dir / "state.json") == updated
+    assert native_calls == [("sandbox", "get", "oma-dev")] * 2
+
+
+def test_migrate_initialized_state_rejects_config_drift(
+    initialized_revision_migration
+):
+    project, state_dir, _, before, _, _ = initialized_revision_migration
+    data = control.read(state_dir / "state.json")
+    data["config_hash"] = "unreviewed"
+    control.save(state_dir / "state.json", data)
+    with pytest.raises(ValueError, match="configuration/identity drift"):
+        control.migrate_revision(project, None, before)
+    assert control.read(project)["manager_revision"] == before
+
+
+def test_migrate_initialized_state_refuses_sandbox_identity_drift(
+    initialized_revision_migration, monkeypatch
+):
+    project, state_dir, _, before, _, _ = initialized_revision_migration
+    monkeypatch.setattr(control, "api", lambda *_: {
+        "id": "foreign", "name": "oma-dev", "phase": "Ready",
+        "configuration_admission": {"state": "accepted"},
+        "labels": {"manager.phase": "2", "manager.project": "oma", "manager.image": "bad"},
+    })
+    with pytest.raises(ValueError, match="ownership differs"):
+        control.migrate_revision(project, None, before)
+    assert control.read(project)["manager_revision"] == before
+
+
+def test_github_stage_errors_are_actionable_not_payloads(monkeypatch):
+    monkeypatch.setattr(control.github_provider, "reconcile", lambda *a, **kw: {}["missing"])
+    with pytest.raises(ValueError, match="GitHub Provider response schema mismatch"):
+        control.reconcile_github({"policy": control.base_policy()}, "apply")
