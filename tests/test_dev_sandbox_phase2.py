@@ -727,6 +727,7 @@ def test_setup_resumes_verified_bootstrap_without_creating_sandbox(
     monkeypatch.setattr(control.github_provider, "reconcile", lambda *a, **k: None)
     monkeypatch.setattr(control, "guest", lambda *a, **k: {})
     monkeypatch.setattr(control, "login_status", lambda _: True)
+    monkeypatch.setattr(control, "require_codex_network", lambda *_: True)
     monkeypatch.setattr(control, "sync_checkout", lambda **_: {"state": "current"})
     monkeypatch.setattr(control, "api", lambda *a: info)
     checked = []
@@ -920,3 +921,85 @@ def test_github_stage_errors_are_actionable_not_payloads(monkeypatch):
     monkeypatch.setattr(control.github_provider, "reconcile", lambda *a, **kw: {}["missing"])
     with pytest.raises(ValueError, match="GitHub Provider response schema mismatch"):
         control.reconcile_github({"policy": control.base_policy()}, "apply")
+
+
+@pytest.fixture
+def codex_preflight_data():
+    return {
+        "tools": {"binaries": [
+            "/opt/codex/vendor/x86_64-unknown-linux-musl/bin/codex",
+            "/sandbox/.codex/packages/app-server-daemon/releases/pinned/bin/codex",
+        ], "launcher": "/usr/local/bin/codex"},
+        "policy": control.base_policy(),
+    }
+
+
+def add_reviewed_codex_rule(data, host, *, access="full", binaries=None):
+    paths = binaries if binaries is not None else data["tools"]["binaries"]
+    name = "test_auth" if host == "auth.openai.com" else "test_workspace"
+    data["policy"]["network_policies"][name] = control.network_rule({
+        "id": name,
+        "host": host,
+        "port": 443,
+        "access": access,
+        "binaries": paths,
+    })
+
+
+def test_codex_preflight_reports_missing_hosts_exact_binaries_and_founder_approval(
+    codex_preflight_data, monkeypatch
+):
+    data = codex_preflight_data
+    monkeypatch.setattr(control, "CONFIG", Path("/private/project.json"))
+    # Pure policy preflight must not query, replace or grant native policy.
+    monkeypatch.setattr(control, "oshell", lambda *_args, **_kw: pytest.fail("No native operations"))
+    with pytest.raises(ValueError) as error:
+        control.require_codex_network(data)
+    message = str(error.value)
+    for item in ("auth.openai.com:443", "chatgpt.com:443", *data["tools"]["binaries"],
+                 "/private/project.json", "rules reconcile", "setup apply", "Founder approval"):
+        assert item in message
+    assert data["policy"] == control.base_policy()
+
+
+def test_codex_preflight_checks_exact_pin_and_full_access(codex_preflight_data):
+    data = codex_preflight_data
+    add_reviewed_codex_rule(data, "auth.openai.com", binaries=data["tools"]["binaries"][:1])
+    add_reviewed_codex_rule(data, "chatgpt.com", access="read-only")
+    with pytest.raises(ValueError) as error:
+        control.require_codex_network(data)
+    message = str(error.value)
+    assert "auth.openai.com:443" in message  # missing pinned daemon path
+    assert "chatgpt.com:443" in message  # read-only is not enough
+
+
+def test_codex_login_needs_only_auth_host_not_workspace(codex_preflight_data):
+    data = codex_preflight_data
+    add_reviewed_codex_rule(data, "auth.openai.com")
+    assert control.require_codex_network(data, ("auth.openai.com",)) is True
+    with pytest.raises(ValueError, match="chatgpt.com:443"):
+        control.require_codex_network(data)
+
+
+def test_codex_preflight_accepts_both_reviewed_hosts(codex_preflight_data):
+    data = codex_preflight_data
+    add_reviewed_codex_rule(data, "auth.openai.com")
+    add_reviewed_codex_rule(data, "chatgpt.com")
+    assert control.require_codex_network(data) is True
+
+
+@pytest.mark.parametrize("action", ["login", "codex"])
+def test_codex_start_refuses_missing_network_before_any_guest_launch(
+    action, codex_preflight_data, monkeypatch
+):
+    data = codex_preflight_data
+    monkeypatch.setattr(control, "state", lambda: data)
+    monkeypatch.setattr(control, "effective", lambda *_: None)
+    monkeypatch.setattr(control, "verify_tools", lambda *_: None)
+    monkeypatch.setattr(control, "task_active", lambda: False)
+    monkeypatch.setattr(control, "settings", lambda: {"agents": {"codex": {"enabled": True}}})
+    monkeypatch.setattr(control, "guest", lambda *_: pytest.fail("Guest login must not start"))
+    monkeypatch.setattr(control, "session", lambda *_a, **_kw: pytest.fail("TUI must not start"))
+    monkeypatch.setattr(control, "login_status", lambda *_: pytest.fail("Login status must not run"))
+    with pytest.raises(ValueError, match="Missing reviewed Codex HTTPS permission"):
+        control.start(action)
