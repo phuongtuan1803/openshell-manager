@@ -7,7 +7,7 @@ The earlier notification-only implementation was insufficient for the requested
 workflow. This correction implements automatic native discovery and real native
 approval/rejection through the version-specific authenticated Gateway API.
 
-**Current status: live end-to-end B15 PENDING (operator hold); offline evidence is historical.**
+**Current status: B15 PASS according to operator-provided live terminal output (2026-10-15); private diagnostics not independently inspected.**
 The initial offline implementation was not deployed or enabled. Subsequent
 operator-run isolated live tests occurred and are documented in the hold section
 below; none establishes a complete B15 PASS. Runtime missing/untrusted native
@@ -54,7 +54,7 @@ PASS entries below are **offline source/fixture evidence**, not host/live proof.
 | B12 | PASS | Private 0700/0600 state and existing key files; owner/link checks, numeric identity validation, TLS verification and secret-bearing error suppression. Native rationale/credential values omitted, token-like scope redacted and approval disabled. Bot credentials never enter RPCs/guest arguments/public artifacts. Disclosure scan required below. |
 | B13 | PASS | Existing host-wide poller lock and operation lock reused, cooperative bounded stop, signal/DB cleanup, explicit service template/lifecycle. Native Gateway selection bound; no installer/setup auto enable. gRPC native sockets explicitly blocked in offline test guards. |
 | B14 | PASS | Full inherited offline suite and packaging/resource regression checks required below. PR3a provenance/source guards and native/model/tool pins unchanged. Added exact Python grpcio/protobuf dependencies for the host adapter; artifact/installed dependency checks updated. |
-| B15 | **PENDING** | Operator-run isolated live attempts produced partial native/Telegram and cleanup evidence, an intentional SIGINT and a create exit-1 blocker; no complete Approve/Reject/LOADED/HTTP verification PASS. Operator requested a hold. See the final hold section. |
+| B15 | **PASS (operator-reported)** | Clean isolated run on development revision `8f25e0d` reported native Approve, policy LOADED, permitted network retry, separate Reject, continued denial, repeated-scope identity, owned cleanup, and `RESULT: PASS`. Live replay injection SKIP by design. Private sanitized diagnostics have not yet been independently inspected; see final acceptance section. |
 
 ## Verification commands and evidence
 
@@ -296,3 +296,16 @@ relax policies, silently grant ACLs, or treat a partial/interrupted run as PASS.
 PASS; final diff/security review; and CI verification for the final branch head
 (where available). Offline test pass counts documented above are historical
 results of earlier commits and do not establish the current branch head or B15.
+
+## 2026-10-15 — B15 operator-reported successful retest
+
+The former operator hold is superseded **for live test execution** by the following later observations. Previous failed/interrupted runs remain historical diagnostics, not evidence against this successful test.
+
+- Host preflight: interactive account could read/write `/dev/kvm`; Gateway PID 3970 and driver PID 3995 both reported supplementary group `108` (`kvm`); native inventory reported **no sandboxes** before testing. No temporary device ACL was required in the supplied preflight.
+- Development revision: `8f25e0dfacad337cdb82d4cd4afc7fa56f1217ff`. Existing Gateway, mTLS, reviewed test image and Telegram connection passed preflight.
+- Dedicated sandbox `tg-664091ee74-dev` passed native identity/Ready/admission/config/provider/static guards, MANUAL mode, loaded state and deny-all baseline. The native bridge was verified.
+- Operator terminal reported: `Native approval confirmed`, `Policy loaded`, `Network retry permitted`, then `Native rejection confirmed`, `Network request remains denied`, repeated rejected scope received a new native identity/notification, and owned sandbox absence confirmed. Final output: **`RESULT: PASS`**.
+- **SKIP (expected):** live callback replay injection; offline replay/concurrency coverage supplied in the Phase 1 report.
+- Private evidence location (do not publish file contents): `~/.local/state/openshell-manager/approval-live/65238dadd1f8060a70424361f6dc7135/result.json` and sibling sanitized diagnostic logs. This documentation update is based on **operator-supplied terminal output only**, not an independent inspection of the private JSON or guest HTTP transcripts. The test's `RESULT: PASS` contract requires successful HTTP 200 and denied HTTP 403 `policy_denied`; exact status codes were not separately printed in the supplied terminal excerpt.
+
+**Remaining before merge:** independently verify the private sanitized B15 evidence if available, confirm no new changes invalidate the earlier Phase 1 offline/security review, settle the documented v0.1.2 rejection-race limitation with the operator, and obtain explicit authorization to transition Draft/merge. GitHub-hosted check runs were absent at Phase 1; absence of CI evidence is not a CI PASS.
