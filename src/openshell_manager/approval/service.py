@@ -296,7 +296,7 @@ def serve(cfg, auth, project, host, gateway=None, workspace="default"):
 
 def main(argv):
     parser = argparse.ArgumentParser(prog='openshell-manager approval', description=BLOCKER)
-    parser.add_argument('action', choices=['setup', 'serve', 'status', 'pending', 'stop'])
+    parser.add_argument('action', choices=['setup', 'serve', 'status', 'pending', 'stop', 'test'])
     parser.add_argument('--project', type=Path, default=os.environ.get('MANAGER_PROJECT'))
     parser.add_argument('--host', type=Path, default=os.environ.get('MANAGER_HOST'))
     parser.add_argument('--gateway', help='Existing local authenticated mTLS Gateway name; enables native discovery')
@@ -305,6 +305,9 @@ def main(argv):
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
+        if args.action == 'test':
+            from . import live_test
+            return live_test.main(args)
         if args.action == 'setup':
             control.require(args.project is not None, 'Supply --project or MANAGER_PROJECT')
             control.require(not any(k.startswith('OPENSHELL_') for k in os.environ), 'OpenShell environment overrides are not allowed')

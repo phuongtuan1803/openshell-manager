@@ -33,7 +33,7 @@ class Telegram:
         self._transport = transport or urllib.request.urlopen
 
     def call(self, method, **payload):
-        require(method in {'getUpdates', 'sendMessage', 'answerCallbackQuery', 'editMessageText'}, 'Unsupported Telegram method')
+        require(method in {'getUpdates', 'sendMessage', 'answerCallbackQuery', 'editMessageText', 'getMe', 'getWebhookInfo'}, 'Unsupported Telegram method')
         try:
             request = urllib.request.Request('https://api.telegram.org/bot' + self._token + '/' + method,
                                              data=json.dumps(payload).encode(),

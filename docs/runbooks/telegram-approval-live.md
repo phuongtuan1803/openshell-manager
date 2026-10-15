@@ -1,5 +1,9 @@
 # Telegram approval: first real run
 
+For the guided single-terminal workflow, run `openshell-manager approval test`;
+see [the one-command runbook](telegram-approval-test.md). This document retains
+manual deployment/diagnostic detail.
+
 This is an **operator-executed procedure**, not evidence of a completed live test.
 The implementation has offline coverage; B15 remains SKIP until the evidence below
 is collected. Follow the [main runbook](telegram-approval-p1.md) for supported scope,

@@ -128,7 +128,11 @@ def smoke(wheel):
         assert 'SKIP' in run([executable, 'setup', '--dry-run', *options]).stdout
         assert not sentinel.exists()
         assert (base / 'state/fixture/project-binding.json').exists()
-        assert 'approval' in run([executable, 'approval', '--help']).stdout
+        approval_help = run([executable, 'approval', '--help']).stdout
+        assert 'approval' in approval_help and 'test' in approval_help
+        # Help for the real-run command remains harmless in the installed artifact.
+        assert 'test' in run([executable, 'approval', 'test', '--help']).stdout
+        assert 'test' in run([python, '-I', '-m', 'openshell_manager', 'approval', 'test', '--help']).stdout
         assert 'disabled' in run([executable, 'approval', 'status', *options]).stdout
         assert 'disabled' in run([executable, 'approval', 'pending', *options]).stdout
         assert not (base / 'state/fixture/approval').exists()

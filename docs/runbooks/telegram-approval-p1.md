@@ -1,5 +1,9 @@
 # Telegram Approval P1 operator runbook
 
+For the guided single-terminal workflow, run `openshell-manager approval test`;
+see [the one-command runbook](telegram-approval-test.md). This document retains
+manual deployment/diagnostic detail.
+
 The bridge now discovers and decides **native OpenShell v0.1.2 network-rule
 proposals** through authenticated Gateway RPCs. Compatibility-inbox notices remain
 read-only fallback. Source/schema/decision evidence and remaining native limits

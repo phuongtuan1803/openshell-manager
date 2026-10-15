@@ -118,3 +118,73 @@ No real host installation is performed by the local packaging fixture harness.
 
 No OMA/PR4/PR5 work, broader generic authorizer, native version upgrade, service
 activation, active host mutation, real credential creation or PR/merge occurred.
+
+## One-command live-test addition
+
+`openshell-manager approval test` now orchestrates the existing bridge and adapter.
+It proves the running revision before state/native actions, validates the pinned
+CLI exec contract and existing local Gateway/mTLS/workspace, requires a real
+reviewed local image receipt/digest/recipe, generates strict isolated profiles and
+a standalone local Git fixture, and creates a fresh owned `tg-<hex>-dev` sandbox.
+No existing sandbox is adopted. Every exec, sandbox-local proposal setting and
+delete rechecks native ownership/UUID. The four named OMA sandboxes are excluded
+by construction and tested as forbidden lifecycle targets.
+
+The only added Telegram methods are read-only `getMe` and `getWebhookInfo` for
+first-run validation. Enrollment uses hidden token entry and a random `/start`
+challenge, private numeric identity confirmation and a private host JSON. Existing
+private configuration is reused. No credential reaches the guest, project files,
+reports or command arguments. A host-wide onboarding check and the existing bridge
+lock prevent normal Manager poller overlap; unrelated pollers remain an operator
+prerequisite.
+
+The managed child runs the existing `approval serve`. The parent never approves or
+rejects a native request. It submits fixed genuine native protocol requests through
+the supported versioned noninteractive CLI exec, waits for Telegram decisions,
+revalidates native result/policy through the existing adapter and checks guest
+wait/load plus actual HTTP 200 retry or explicit `policy_denied` / HTTP 403.
+The test can enable the registered proposal surface only on its new owned sandbox;
+it never enables AUTO, adds generic policy grants or changes Gateway settings.
+
+Timeouts, interruption, uncertain creation/mutation and ownership drift keep a
+private durable record and cannot produce a fake PASS. Cleanup stops only its child
+and deletes only its owned sandbox, requiring confirmed absence in the native
+inventory. An uncertain runtime grant is reported. Reviewed images, existing VMs,
+services and credentials are not removed; private audit/config fixtures are retained.
+Native dedup and live callback replay checks can be explicit SKIP; no identifiers
+or callback data are invented to manufacture evidence.
+
+The [one-command runbook](runbooks/telegram-approval-test.md) replaces manual setup
+as the normal test procedure and documents the genuine first-run prerequisites.
+B01–B14 retain their qualified offline status; the new orchestration has offline
+coverage with mocked external services, **not live success evidence**. B15 remains
+**SKIP**: this implementation session did not execute the real command against
+Telegram, a Gateway, or any VM. No paid model calls occurred.
+
+The native CLI also writes its local `last_sandbox` selection on exec. Lifecycle
+commands therefore use a private per-run CLI registry, bound to the original
+Gateway name/endpoint/CA with private copies of existing mTLS materials. The
+original registry is never rewritten. Copies are removed even after a failed or
+interrupted test; hard-crash remnants require private operator review. No keys
+are generated or copied into guest/project data. Offline tests check private
+modes, credential cleanup and preservation of the original sandbox selection.
+
+Final verification for this addition (2026-10-15), with
+`UV_CACHE_DIR=/tmp/pr3b-uv-cache`:
+
+| Check | Actual result |
+| --- | --- |
+| `uv run --offline --locked python -m pytest -q tests/test_approval_live.py` | **59 passed** in 1.35 seconds. First-run/reuse/identity, exact proposal orchestration, actual existing engine with typed mocked RPCs, deadline/expiry/Ctrl-C, fast decisions, ownership isolation and cleanup, missing prerequisites, secret suppression and private CLI registry preservation. |
+| `uv run --offline --locked python -m pytest -q` | **458 passed, 16 skipped** in 43.47 seconds after final code changes. The 16 skips remain the explicitly gated live agent evaluations. |
+| `uv lock --offline --check` | PASS; 11 resolved packages, no dependency or native-tool upgrade. |
+| `uv build --offline` | PASS; wheel and sdist. |
+| `uv run --offline --locked python tools/verify_packaging.py` | PASS; 38 wheel files, 87 sdist files, 12 reviewed asset hashes; isolated installed Git fixture with original source hidden, exact runtime dependencies, one-command help and isolated Python child import, legacy wrappers and native tripwires. |
+| Diff / disclosure / documentation | PASS; whitespace, Python syntax, local runbook links/fences and private key/token/workstation-path scan across all 11 changed/new public files. Only synthetic test data. |
+| Real `approval test` / B15 | **SKIP — not executed**. No real credentials or Telegram/Gateway/VM operations; no paid calls. |
+
+Prior PR3b correction results above remain historical. A fixture Git SHA from the
+packaging harness is not a release SHA or live evidence. The native CLI registry
+side effect is verified in the immutable
+[exec handler](https://github.com/NVIDIA/OpenShell/blob/6648bd0c290efbc41ba131ee9831ee45cd431f94/crates/openshell-cli/src/main.rs#L3594);
+[test source references](runbooks/telegram-approval-test.md) cover the other native
+execution/lifecycle contracts.

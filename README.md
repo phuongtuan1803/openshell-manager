@@ -70,7 +70,8 @@ proposals through an existing authenticated local Gateway. Supported requests
 provide **Approve rule**, **Reject** and **Details**, with native result/load
 confirmation, private SQLite audit and fail-closed recovery. Compatibility notices
 remain read-only fallback. See the [operator runbook](docs/runbooks/telegram-approval-p1.md),
-[step-by-step first real run](docs/runbooks/telegram-approval-live.md),
+[one-command live test](docs/runbooks/telegram-approval-test.md) (`openshell-manager approval test`),
+[manual first real run](docs/runbooks/telegram-approval-live.md),
 [versioned native API evidence](docs/native-api-v0.1.2.md) and
 [acceptance report](docs/pr3b-acceptance.md). Live acceptance is not yet verified;
 package installation never starts or enables the optional user service.
