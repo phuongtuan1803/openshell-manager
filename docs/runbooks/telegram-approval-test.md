@@ -185,3 +185,39 @@ and [sandbox-local proposal opt-in](https://github.com/NVIDIA/OpenShell/blob/664
 Runtime CLI help must also advertise the required execution flags before any VM
 is created. Native authorization and decisions continue through the existing
 [verified proposal adapter](../native-api-v0.1.2.md).
+
+## Native verification diagnostics
+
+Creation now prints the owned sandbox name and UUID verification result, followed
+by native admission and guard checkpoints. `result.json` stores only fixed codes
+and pass/wait/fail/timeout states under `checks.native_verification`, updated before
+cleanup. No full policy, server admission prose, provider data or token is recorded.
+The last failed/waiting code identifies the blocker; earlier PASS checks are
+historical observations, not a promise that later state remained unchanged.
+
+| Checkpoint | Meaning and action |
+| --- | --- |
+| `sandbox_identity`, `config_binding`, `guest_tools` | UUID/project/image/scope binding or pinned guest tools differ. Stop; inspect the owned test binding and installed revision. Never adopt another sandbox. |
+| `sandbox_ready`, `initial_native_admission`, `native_admission` | Starting/pending states may converge. Rejected admission fails immediately; inspect native compatibility locally without publishing raw errors. |
+| `config_schema`, `config_admitted`, `policy_source`, `config_revision` | Unsupported structured data, invalid effective configuration, global policy or missing revision. Stop and check pinned API/config compatibility; do not replace global policy. |
+| `provider_revision_attachment` | Missing provider-state revision/attachment epoch, even for zero providers. Stop; check pinned native API compatibility without adding credentials/providers. |
+| `admission_instance`, `admission_policy_revision`, `admission_config_revision`, `admission_provider_revision` | Supervisor observation differs from current desired configuration. Bounded 120-second convergence; a timeout reports the specific mismatch. Investigate supervisor configuration loading, not a broader permission grant. |
+| `filesystem_guard`, `landlock_guard`, `process_guard`, `middleware_guard` | Effective static authority differs from the reviewed bootstrap. Fail immediately. Never reconcile by weakening the guard. |
+| `loaded_schema`, `loaded_policy_revision` | Unsupported policy-status data, pending revision, or failed/superseded load. Pending loads may converge; explicit failed/superseded loads fail immediately. |
+| `manual_approval_mode`, `deny_all_network` | AUTO/unsupported mode or unexpected bootstrap network rules. Stop; no test proposal may be submitted. |
+| `rpc_METHOD_STATUS`, `rpc_METHOD_precondition`, `native_unclassified` | Named native read/transport failure. UNAVAILABLE/deadline/resource exhaustion/aborted may converge; authentication/permission/precondition failures stop. An unclassified error fails closed without raw exception disclosure. |
+
+The bootstrap explicitly sets `process.run_as_user` and `process.run_as_group`
+to `sandbox` **before creation**. OpenShell v0.1.2's policy parser preserves an
+omitted process block, and canonicalization does not insert these fields. The
+previous bootstrap omitted it while our strict adapter expected explicit fields,
+which reproduces a permanent `process_guard` failure offline. Existing images,
+Gateway settings and live sandbox policies are not changed by this correction.
+The original live report did not retain invariant evidence, so this reproducible
+incompatibility is not proof that it was the only failure on that host.
+
+Pinned source evidence:
+[policy parser maps the optional process block](https://github.com/NVIDIA/OpenShell/blob/6648bd0c290efbc41ba131ee9831ee45cd431f94/crates/openshell-policy/src/lib.rs#L621),
+[canonicalization preserves process omission](https://github.com/NVIDIA/OpenShell/blob/6648bd0c290efbc41ba131ee9831ee45cd431f94/crates/openshell-policy/src/lib.rs#L1872),
+[create validates and persists the supplied policy](https://github.com/NVIDIA/OpenShell/blob/6648bd0c290efbc41ba131ee9831ee45cd431f94/crates/openshell-server/src/grpc/sandbox.rs#L531),
+[provider revision hashes even an empty record set](https://github.com/NVIDIA/OpenShell/blob/6648bd0c290efbc41ba131ee9831ee45cd431f94/crates/openshell-server/src/grpc/policy.rs#L2970).

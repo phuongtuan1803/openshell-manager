@@ -28,6 +28,13 @@ class NativeUnavailable(ValueError):
     pass
 
 
+class NativeVerification(NativeUnavailable):
+    """Only fixed invariant codes escape native verification; no server prose."""
+    def __init__(self, code, retryable=False):
+        self.code, self.retryable = code, retryable
+        super().__init__(f'Native verification: {code} ({"converging" if retryable else "mismatch"})')
+
+
 class NativeStale(NativeUnavailable):
     pass
 
@@ -102,7 +109,9 @@ class GatewayRPC:
         except grpc.RpcError as error:
             if error.code() == grpc.StatusCode.FAILED_PRECONDITION:
                 raise NativeStale('Native precondition refused; fresh review required') from None
-            raise NativeUnavailable(BLOCKER) from None
+            raise NativeVerification('rpc_' + method + '_' + error.code().name.lower(),
+                error.code() in {grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED,
+                                 grpc.StatusCode.RESOURCE_EXHAUSTED, grpc.StatusCode.ABORTED}) from None
         except Exception:
             raise NativeUnavailable(BLOCKER) from None
 
@@ -120,50 +129,79 @@ class NativeAdapter:
     def selector(self):
         return {'workspace': self.workspace}
 
-    def context(self):
-        health = self.call('Health')
-        checked(health.version == '0.1.2' and health.status == 1)
-        resource = self.call('GetSandbox', name=self.cfg['sandbox'], workspace_scope=self.selector).sandbox
+    def context(self, checkpoint=None):
+        def check(code, condition, retryable=False):
+            if checkpoint:
+                checkpoint(code, 'pass' if condition else 'wait' if retryable else 'fail')
+            if not condition:
+                raise NativeVerification(code, retryable)
+
+        def read(method, **fields):
+            try:
+                return self.call(method, **fields)
+            except NativeVerification as error:
+                check(error.code, False, error.retryable)
+            except NativeStale:
+                check('rpc_' + method + '_precondition', False)
+            except NativeUnavailable:
+                check('rpc_' + method, False, True)
+
+        health = read('Health')
+        check('gateway_version', health.version == '0.1.2')
+        check('gateway_health', health.status == 1, True)
+        resource = read('GetSandbox', name=self.cfg['sandbox'], workspace_scope=self.selector).sandbox
         meta = resource.metadata
-        local = control.read(private(self.cfg['state'] / 'state.json'))
+        try:
+            local = control.read(private(self.cfg['state'] / 'state.json'))
+        except (ValueError, OSError):
+            check('local_state_private', False)
         tools = local.get('tools', {})
-        checked(type(tools.get('uid')) is int and tools['uid'] > 0
+        check('guest_tools', type(tools.get('uid')) is int and tools['uid'] > 0
                 and tools.get('version') == self.cfg['codex_version']
                 and isinstance(tools.get('binaries'), list) and tools['binaries']
                 and all(isinstance(b, str) and re.fullmatch(r'/(?:[A-Za-z0-9_@.+-]+/)*[A-Za-z0-9_@.+-]+', b) for b in tools['binaries'])
                 and isinstance(tools.get('native_sha256'), str) and re.fullmatch(r'[a-f0-9]{64}', tools['native_sha256']))
         expected_config = control.digest(json.dumps(self.cfg, sort_keys=True, default=str).encode()
             + self.cfg['source_manifest'].read_bytes() + self.cfg['edit_scope'].read_bytes())
-        checked(local.get('config_hash') == expected_config and meta.id == local.get('sandbox_id')
+        check('config_binding', local.get('config_hash') == expected_config)
+        check('sandbox_identity', meta.id == local.get('sandbox_id')
                 and meta.name == self.cfg['sandbox'] and meta.workspace == self.workspace
                 and meta.labels.get('manager.project') == self.cfg['id']
                 and meta.labels.get('manager.phase') == '2'
                 and meta.labels.get('manager.image') == self.cfg['image_id'].split(':')[1][:32]
-                and resource.status.phase == 2 and not meta.HasField('deletion_time'))
-        config = self.call('GetSandboxConfig', name=self.cfg['sandbox'], workspace_scope=self.selector)
-        checked(no_unknown(config) and config.HasField('policy') and config.configuration_admitted
-                and config.workspace == self.workspace and config.policy_source == 1
-                and config.global_policy_version == 0 and config.config_revision > 0
-                and config.provider_env_revision > 0 and config.configuration_instance_id
-                and config.provider_attachment_epoch and re.fullmatch(r'[a-f0-9]{64}', config.policy_hash))
+                and not meta.HasField('deletion_time'))
+        check('sandbox_ready', resource.status.phase == 2, resource.status.phase in {0, 1})
+        config = read('GetSandboxConfig', name=self.cfg['sandbox'], workspace_scope=self.selector)
+        check('config_schema', no_unknown(config) and config.HasField('policy'))
+        check('config_admitted', config.configuration_admitted)
+        check('policy_source', config.workspace == self.workspace and config.policy_source == 1
+                and config.global_policy_version == 0)
+        check('config_revision', config.config_revision > 0 and bool(re.fullmatch(r'[a-f0-9]{64}', config.policy_hash)))
+        check('provider_revision_attachment', config.provider_env_revision > 0 and bool(config.provider_attachment_epoch))
         admission = resource.status.configuration_admission
-        checked(admission.state == 2 and admission.instance_id == config.configuration_instance_id
-                and admission.policy_version == config.version and admission.policy_hash == config.policy_hash
-                and admission.config_revision == config.config_revision and admission.provider_env_revision == config.provider_env_revision)
+        check('native_admission', admission.state == 2, admission.state in {0, 1})
+        check('admission_instance', bool(config.configuration_instance_id)
+                and admission.instance_id == config.configuration_instance_id, True)
+        check('admission_policy_revision', admission.policy_version == config.version
+                and admission.policy_hash == config.policy_hash, True)
+        check('admission_config_revision', admission.config_revision == config.config_revision, True)
+        check('admission_provider_revision', admission.provider_env_revision == config.provider_env_revision, True)
         reviewed = local.get('policy', {})
         filesystem = reviewed.get('filesystem_policy', {})
-        checked(filesystem and set(config.policy.filesystem.read_only) == set(filesystem.get('read_only', []))
+        check('filesystem_guard', filesystem and set(config.policy.filesystem.read_only) == set(filesystem.get('read_only', []))
                 and set(config.policy.filesystem.read_write) == set(filesystem.get('read_write', []))
-                and config.policy.filesystem.include_workdir == filesystem.get('include_workdir', False)
-                and config.policy.landlock.compatibility == reviewed.get('landlock', {}).get('compatibility') == 'hard_requirement'
-                and MessageToDict(config.policy.process, preserving_proto_field_name=True) == (reviewed.get('process') or {'run_as_user': 'sandbox', 'run_as_group': 'sandbox'})
-                and not config.policy.network_middlewares)  # Existing Manager P1 declares no middleware authority.
-        loaded = self.call('GetSandboxPolicyStatus', sandbox=self.cfg['sandbox'], workspace_scope=self.selector,
-                           version=config.version)
-        checked(no_unknown(loaded) and loaded.revision.version == config.version and loaded.revision.status == 2
-                and loaded.active_version == config.version and re.fullmatch(r'[a-f0-9]{64}', loaded.revision.policy_hash))
+                and config.policy.filesystem.include_workdir == filesystem.get('include_workdir', False))
+        check('landlock_guard', config.policy.landlock.compatibility == reviewed.get('landlock', {}).get('compatibility') == 'hard_requirement')
+        check('process_guard', MessageToDict(config.policy.process, preserving_proto_field_name=True)
+                == (reviewed.get('process') or {'run_as_user': 'sandbox', 'run_as_group': 'sandbox'}))
+        check('middleware_guard', not config.policy.network_middlewares)
+        loaded = read('GetSandboxPolicyStatus', sandbox=self.cfg['sandbox'], workspace_scope=self.selector, version=config.version)
+        check('loaded_schema', no_unknown(loaded))
+        check('loaded_policy_revision', loaded.revision.version == config.version and loaded.revision.status == 2
+                and loaded.active_version == config.version and bool(re.fullmatch(r'[a-f0-9]{64}', loaded.revision.policy_hash)),
+                loaded.revision.status in {0, 1, 2})
         mode = config.settings.get('proposal_approval_mode')
-        checked(mode is not None and (not mode.value.WhichOneof('value') or mode.value.string_value == 'manual'))
+        check('manual_approval_mode', mode is not None and (not mode.value.WhichOneof('value') or mode.value.string_value == 'manual'))
         return config, {'gateway': getattr(self.rpc, 'identity', 'fixture'), 'project': self.cfg['id'],
             'manager_revision': self.cfg['manager_revision'], 'sandbox': meta.name, 'sandbox_id': meta.id,
             'workspace': self.workspace, 'binaries': sorted(set(tools['binaries']) | {'/usr/bin/curl'}),

@@ -512,7 +512,7 @@ def test_prepare_generates_valid_binding_without_full_setup(trial, monkeypatch):
     monkeypatch.setattr(trial,'owned',lambda: sandbox(trial))
     tools={'uid':1000,'version':'codex-cli 0.162.1','binaries':['/usr/local/lib/codex/bin/codex'], 'native_sha256':'e'*64}
     monkeypatch.setattr(trial,'execute',lambda *a: json.dumps(tools))
-    monkeypatch.setattr(live,'NativeAdapter',lambda *a: SimpleNamespace(context=lambda: (SimpleNamespace(policy=SimpleNamespace(network_policies={})),{})))
+    monkeypatch.setattr(live,'NativeAdapter',lambda *a: SimpleNamespace(context=lambda **kwargs: (SimpleNamespace(policy=SimpleNamespace(network_policies={})),{})))
     trial.prepare(trial.image)
     profile = json.loads(trial.project.read_text())
     assert profile['rules']==[] and profile['manager_revision']=='a'*40
@@ -522,6 +522,7 @@ def test_prepare_generates_valid_binding_without_full_setup(trial, monkeypatch):
     create = next(c for c in calls if c[:2]==('sandbox','create'))
     assert '--no-auto-providers' in create and create[create.index('--approval-mode')+1]=='manual'
     assert create[create.index('--from')+1]==trial.image
+    assert json.loads((trial.directory/'bootstrap-policy.json').read_text())['process'] == {'run_as_user':'sandbox','run_as_group':'sandbox'}
     assert not any('policy' in c[:2] for c in calls)  # no generic policy mutation
     assert ('settings','set',trial.name,'--key','agent_policy_proposals_enabled','--value','true') in calls
 
@@ -583,3 +584,39 @@ def test_cli_registry_is_private_and_preserves_real_selection(trial, monkeypatch
     assert not trial.native_config.exists()
     assert (source/'last_sandbox').read_text()=='default\noma-security-test'
     assert (source/'mtls/tls.key').exists()
+
+
+@pytest.mark.parametrize('kind', ['permanent', 'converge', 'timeout', 'unclassified', 'network'])
+def test_native_checkpoints_are_durable_before_cleanup(trial, monkeypatch, kind, capsys):
+    attempts = []
+    def context(checkpoint):
+        checkpoint('sandbox_identity', 'pass')
+        attempts.append(1)
+        if kind == 'unclassified': raise live.NativeUnavailable('secret-token private-provider-data')
+        if kind == 'permanent':
+            checkpoint('process_guard', 'fail')
+            raise live.NativeVerification('process_guard')
+        if kind == 'timeout' or (kind == 'converge' and len(attempts) == 1):
+            checkpoint('admission_config_revision', 'wait')
+            raise live.NativeVerification('admission_config_revision', True)
+        checkpoint('process_guard', 'pass')
+        return SimpleNamespace(policy=SimpleNamespace(network_policies={'unexpected': 1} if kind == 'network' else {})), {}
+    trial.adapter = SimpleNamespace(context=context)
+    def bounded(check, seconds, message):
+        assert seconds == 120
+        if not check() and not check(): raise live.Failed(message)
+    monkeypatch.setattr(live, 'wait_for', bounded)
+    if kind == 'converge':
+        trial.verify_context()
+        assert len(attempts) == 2
+    else:
+        with pytest.raises((live.Blocked, live.Failed)):
+            trial.verify_context()
+    report = json.loads((trial.directory/'result.json').read_text())
+    checks = report['checks']['native_verification']
+    assert checks['sandbox_identity'] == 'pass'
+    if kind == 'timeout': assert checks['admission_config_revision'] == 'timeout'
+    if kind == 'permanent':
+        assert checks['process_guard'] == 'fail' and len(attempts) == 1
+    if kind == 'unclassified': assert checks['native_unclassified'] == 'fail'
+    assert 'secret-token' not in json.dumps(report) + capsys.readouterr().out

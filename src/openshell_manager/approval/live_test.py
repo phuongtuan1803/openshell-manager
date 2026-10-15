@@ -20,7 +20,7 @@ from pathlib import Path
 
 from .. import configuration, control, provenance
 from ..assets import ROOT, RESOURCES
-from .native import GatewayRPC, NativeAdapter, NativeUnavailable, NativeStale, digest
+from .native import GatewayRPC, NativeAdapter, NativeUnavailable, NativeStale, NativeVerification, digest
 from .store import private
 from .telegram import Telegram, credentials
 from .service import bridge_lock
@@ -306,6 +306,40 @@ class LiveTest:
             'runtime_grant_possible': self.grant_possible, 'native_resource_absent': self.cleaned,
             'checks': self.results})
 
+    def checkpoint(self, code, status):
+        checks = self.results.setdefault('native_verification', {})
+        if checks.get(code) != status:
+            checks[code] = status
+            self.journal()  # Persist before failure propagation and owned cleanup.
+            say('PASS' if status == 'pass' else 'WAIT' if status == 'wait' else 'FAIL',
+                'Native checkpoint: ' + code)
+
+    def verify_context(self):
+        last = 'not_started'
+        def admitted():
+            nonlocal last
+            try:
+                config, _ = self.adapter.context(checkpoint=self.checkpoint)
+                if config.policy.network_policies:
+                    self.checkpoint('deny_all_network', 'fail')
+                    raise Blocked('Native invariant deny_all_network: unexpected bootstrap rules; no adoption permitted.')
+                self.checkpoint('deny_all_network', 'pass')
+                return True
+            except NativeVerification as error:
+                last = error.code
+                if not error.retryable:
+                    raise Blocked(f'Native invariant {error.code} failed. See result.json native_verification and the one-command runbook; no security check bypassed.') from None
+                return False
+            except NativeUnavailable:
+                # An unclassified adapter failure must not be silently retried.
+                self.checkpoint('native_unclassified', 'fail')
+                raise Blocked('Native invariant native_unclassified: adapter unavailable; inspect version/API compatibility. No raw native error disclosed.') from None
+        try:
+            wait_for(admitted, 120, 'Native verification convergence deadline reached.')
+        except Failed:
+            self.checkpoint(last, 'timeout')
+            raise Failed(f'Native convergence timed out at invariant {last} after 120 seconds. See result.json native_verification and the one-command runbook.') from None
+
     def prepare(self, image):
         self.image = image
         self.isolate_cli_registry()
@@ -329,11 +363,16 @@ class LiveTest:
         need(not any(item.get('name') == self.name for item in self.listing()),
              'Dedicated test name already exists; refusing adoption.')
         baseline = control.base_policy()
+        # v0.1.2 parsing/canonicalization preserves omitted process fields. Bind
+        # the exact identity required by the adapter before creation, never via
+        # a live policy update (native process fields are static).
+        baseline['process'] = {'run_as_user': 'sandbox', 'run_as_group': 'sandbox'}
         policy = self.directory / 'bootstrap-policy.json'
         control.save(policy, baseline)
         control.image(check=True)  # Reuse the existing Manager digest verification.
         self.create_attempted = True
         self.journal()  # Durable ownership intent before any native creation.
+        say('WAIT', 'Creating owned isolated test sandbox: ' + self.name)
         self.cli('sandbox', 'create', '--name', self.name, '--from', image, '--policy', str(policy),
             '--no-auto-providers', '--approval-mode', 'manual', '--label', 'manager.phase=2',
             '--label', 'manager.project=' + self.project_id, '--label', 'manager.image=' + image.split(':')[1][:32],
@@ -341,28 +380,33 @@ class LiveTest:
             '--', '/bin/sleep', 'infinity', timeout=600)
         self.resource_id = self.owned().metadata.id
         self.journal()
+        say('PASS', 'Owned isolated sandbox created; UUID verified')
+        say('WAIT', 'Waiting for isolated sandbox Ready state')
         wait_for(lambda: self.owned().status.phase == 2, 180, 'Isolated sandbox did not reach Ready within 180 seconds.')
         # Supported sandbox-local opt-in only; no global/Gateway setting is changed.
         self.owned()
         self.cli('settings', 'set', self.name, '--key', 'agent_policy_proposals_enabled', '--value', 'true')
+        say('WAIT', 'Checking native configuration admission after sandbox-local proposal opt-in')
         def configured():
             status = self.owned().status
-            return status.phase == 2 and status.configuration_admission.state == 2
-        wait_for(configured, 120, 'Owned sandbox proposal configuration was not admitted within 120 seconds.')
+            accepted = status.phase == 2 and status.configuration_admission.state == 2
+            state = status.configuration_admission.state
+            self.checkpoint('initial_native_admission', 'pass' if accepted else 'fail' if state == 3 else 'wait')
+            need(state != 3, 'Native invariant initial_native_admission: configuration rejected. Review bootstrap policy and pinned native compatibility; no raw admission prose disclosed.')
+            return accepted
+        try:
+            wait_for(configured, 120, 'Native invariant initial_native_admission did not converge within 120 seconds.')
+        except Failed:
+            self.checkpoint('initial_native_admission', 'timeout')
+            raise
         data = json.loads(self.execute('/usr/bin/python3', '-I', '-c', (ROOT / 'guest.py').read_text(),
                                       base64.b64encode(b'{"action":"tools"}').decode()))
         need(data.get('uid', 0) > 0 and data.get('version') == self.cfg['codex_version'], 'Reviewed image guest tools/UID do not match pinned Manager requirements.')
         control.save(self.cfg['state'] / 'state.json', {'sandbox_id': self.resource_id,
             'config_hash': control.config_hash(), 'tools': data, 'policy': baseline, 'snapshot': None})
         self.adapter = NativeAdapter(self.cfg, self.rpc, self.workspace)
-        def admitted():
-            try:
-                config, _ = self.adapter.context()
-                need(not config.policy.network_policies, 'Test bootstrap is not deny-all; refusing adoption.')
-                return True
-            except NativeUnavailable:
-                return False
-        wait_for(admitted, 120, 'Isolated sandbox policy/admission/MANUAL state could not be verified within 120 seconds.')
+        say('WAIT', 'Verifying native policy, binding, provider revisions and MANUAL guards')
+        self.verify_context()
         say('PASS', 'Isolated test sandbox ready')
 
     def execute(self, *command):

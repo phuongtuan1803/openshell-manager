@@ -213,3 +213,41 @@ pruned. This replaces the previous separately established image prerequisite.
 - Live Docker build and native/Telegram acceptance: **SKIP**. No host Docker,
   Gateway, sandbox, image or credential operations were executed. **B15 remains
   SKIP**; mocked image preparation is not live approval evidence.
+
+## First native-context live failure correction
+
+Founder-reported live evidence for `c12ef874e7da2f4fb0d99db6dc9e0192d2f3ec2a`:
+revision, Gateway/mTLS, dedicated image and Telegram connection passed; isolated
+creation succeeded; native context timed out; owned cleanup passed; no permission
+was granted. This is **not B15 PASS**. The old exception suppression retained no
+failed invariant, so the exact original host failure remains unproven.
+
+Offline source analysis reproduced an incompatibility: the bootstrap omitted
+`process`, while the adapter required explicit sandbox user/group. Pinned v0.1.2
+`openshell-policy/src/lib.rs` parser (`raw.process.map`, line 621) and
+canonicalization (line 1872) preserve omission; server create validates/persists
+that policy (`grpc/sandbox.rs`, line 531). The test now includes the exact required
+sandbox identity before creation; no existing live process policy is changed and
+no guard is relaxed. The runbook links immutable source references.
+
+`NativeAdapter.context()` now reports named static and convergence invariants.
+The one-command test persists their safe status codes in private `result.json`
+before cleanup, fails immediately on permanent mismatch/rejected admission, and
+names the last blocking invariant on bounded convergence timeout. Fixed gRPC
+status codes distinguish transient transport errors from permission/authentication
+failures. Native error prose, full policies and provider contents are excluded.
+Creation, Ready and admission progress are visible. Owned cleanup and uncertain
+mutation rules are unchanged; these diagnostic retries are reads only.
+
+Focused offline verification: **158 passed** (`tests/test_approval_live.py` and
+`tests/test_approval_native.py`, 108.91 seconds). Includes the omitted-process
+regression, exact guard/provider/mode/config/load/admission diagnostics, durable
+pre-cleanup reports, retry convergence, timeout and secret suppression.
+
+No new real test, Docker/Gateway operation or paid model call was performed.
+A new isolated live run still requires explicit authorization; **B15 remains SKIP**.
+
+Complete offline regression verification after final code changes: **484 passed,
+16 skipped** in 111.15 seconds (`uv run --offline --locked python -m pytest -q`).
+The 16 skips remain the gated live agent evaluations. Syntax, final diff whitespace
+and credential-disclosure checks passed.

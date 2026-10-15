@@ -584,3 +584,47 @@ def test_existing_discovered_codex_binary_binding_and_drift(setup):
     state_path.write_text(json.dumps(state))
     bridge.update(callback(bridge.store, bot))
     assert not rpc.mutations
+
+
+@pytest.mark.parametrize('field,code,retryable', [
+    ('process', 'process_guard', False), ('landlock', 'landlock_guard', False),
+    ('filesystem', 'filesystem_guard', False), ('mode', 'manual_approval_mode', False),
+    ('provider', 'provider_revision_attachment', False), ('config', 'config_revision', False),
+    ('load', 'loaded_policy_revision', True), ('rejected', 'native_admission', False),
+])
+def test_context_reports_exact_sanitized_invariant(setup, field, code, retryable):
+    cfg, rpc, adapter, *_ = setup
+    config = rpc.responses['GetSandboxConfig']
+    if field in {'process', 'landlock', 'filesystem'}: config.policy.ClearField(field)
+    if field == 'mode': config.settings['proposal_approval_mode'].value.string_value = 'auto'
+    if field == 'provider': config.provider_attachment_epoch = ''
+    if field == 'config': config.config_revision = 0
+    if field == 'load':
+        original = rpc.call
+        def call(method, **fields):
+            result = original(method, **fields)
+            if method == 'GetSandboxPolicyStatus': result.revision.status = 1
+            return result
+        rpc.call = call
+    if field == 'rejected':
+        rpc.responses['GetSandbox'].sandbox.status.configuration_admission.state = 3
+        rpc.responses['GetSandbox'].sandbox.status.configuration_admission.error = 'PRIVATE-PROVIDER-TOKEN'
+    checkpoints = []
+    with pytest.raises(native.NativeVerification) as error:
+        adapter.context(checkpoint=lambda *args: checkpoints.append(args))
+    assert error.value.code == code and error.value.retryable == retryable
+    assert checkpoints[-1] == (code, 'wait' if retryable else 'fail')
+    assert 'PRIVATE-PROVIDER-TOKEN' not in str(error.value)
+
+
+def test_v012_omitted_process_is_not_an_explicit_sandbox_identity(setup):
+    # parse_sandbox_policy/to_proto raw.process.map and canonicalization preserve
+    # absence. The previous test bootstrap had no process section, unlike fixtures.
+    cfg, rpc, adapter, *_ = setup
+    policy = rpc.responses['GetSandboxConfig'].policy
+    policy.ClearField('process')
+    with pytest.raises(native.NativeVerification, match='process_guard'):
+        adapter.context()
+    policy.process.run_as_user = 'sandbox'
+    policy.process.run_as_group = 'sandbox'
+    adapter.context()  # Explicit creation policy satisfies the unchanged guard.
