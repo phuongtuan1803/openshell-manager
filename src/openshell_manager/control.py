@@ -846,6 +846,12 @@ def setup(mode):
     recovering = exists and not (STATE / "state.json").is_file()
     if recovering:
         require(mode == "apply", "Setup incomplete; run setup.sh to resume verified bootstrap")
+        require(
+            PROFILE is not None
+            and (STATE / "project-binding.json").is_file()
+            and (STATE / "bootstrap-policy.json").is_file(),
+            "Existing sandbox lacks Manager bootstrap evidence; refusing adoption",
+        )
     if not exists:
         require(mode != "check", "Development sandbox missing; run setup.sh")
         image_ref = NAME + ":" + image_id.split(":")[1][:12]

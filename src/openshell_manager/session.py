@@ -129,12 +129,16 @@ def unmanaged_agent():
         try:
             argv = (item / "cmdline").read_bytes().split(b"\0")
             if any(
-                Path(arg.decode(errors="ignore")).name in {"codex", "claude", "opencode"}
+                Path(arg.decode(errors="ignore")).name in {"codex", "codex.js", "claude", "opencode"}
                 for arg in argv[:2]
             ):
                 return True
-        except (OSError, ValueError):
+        except (FileNotFoundError, ProcessLookupError):
+            # A process may exit between listing /proc and reading cmdline.
             continue
+        except (OSError, ValueError):
+            # Unreadable process metadata cannot establish an idle guest.
+            return True
     return False
 
 

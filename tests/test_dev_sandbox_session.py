@@ -404,3 +404,44 @@ def test_source_lease_uses_runtime_project_lock(monkeypatch, tmp_path):
         with pytest.raises(ValueError, match='Concurrent active agent'):
             with session.lease():
                 pytest.fail('Runtime source lock must exclude sync')
+
+
+@pytest.mark.parametrize("argv, active", [
+    (b"/opt/codex/bin/codex\0login\0--device-auth\0", True),
+    (b"node\0/usr/local/lib/node_modules/@openai/codex/bin/codex.js\0login\0--device-auth\0", True),
+    (b"/sandbox/.codex/packages/app-server-daemon/releases/pinned/bin/codex\0app-server\0", True),
+    (b"/usr/bin/claude\0", True),
+    (b"/usr/bin/opencode\0", True),
+    (b"node\0/sandbox/project/server.js\0", False),
+    (b"/bin/sleep\0infinity\0", False),
+])
+def test_unmanaged_agent_detects_guest_launches(monkeypatch, tmp_path, argv, active):
+    process = tmp_path / "123"
+    process.mkdir()
+    (process / "cmdline").write_bytes(argv)
+    monkeypatch.setattr(session, "Path", lambda value: tmp_path if value == "/proc" else Path(value))
+    assert session.unmanaged_agent() is active
+
+
+@pytest.mark.parametrize("error, active", [
+    (FileNotFoundError(), False),
+    (ProcessLookupError(), False),
+    (PermissionError(), True),
+    (OSError("unreadable"), True),
+])
+def test_unmanaged_agent_requires_readable_process_metadata(monkeypatch, error, active):
+    class Process:
+        name = "123"
+
+        def __truediv__(self, _):
+            return self
+
+        def read_bytes(self):
+            raise error
+
+    class Proc:
+        def iterdir(self):
+            return [Process()]
+
+    monkeypatch.setattr(session, "Path", lambda _: Proc())
+    assert session.unmanaged_agent() is active

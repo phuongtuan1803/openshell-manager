@@ -9,6 +9,6 @@
   "docker/Dockerfile": "80cec3fffa1f7e208e8468a57bf177f51a896bca2b07aeef6d05265e08ae03fc",
   "docker/Dockerfile.agent": "cb543f7a942e65b6003dec254edd24381d4bf03d2f32518d1a3d6bd9037d7ece",
   "src/openshell_manager/guest.py": "6611a8c35f310b3695479d02690ca807d30ee66aacbe689820eaaa4900cff00a",
-  "src/openshell_manager/session.py": "23f4e728c321631f2ec4835574fb2734946d77f779d2c28c93c1135c3c6161ce",
+  "src/openshell_manager/session.py": "f15461775adcccc3a3eb85cc51150d2b5294d515584658d270f6ddec44fa2759",
   "src/openshell_manager/validate_guest.py": "53f25ab01bfaf360f3b328052e77328bd14abc964320bb928fb1cc76c062872b"
 }

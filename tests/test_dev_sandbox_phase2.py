@@ -750,7 +750,8 @@ def test_setup_resumes_verified_bootstrap_without_creating_sandbox(
 
     control.setup("apply")
     assert control.read(control.STATE / "state.json")["sandbox_id"] == info["id"]
-    assert checked == [control.base_policy(), control.base_policy()]
+    # Recovery, initial adoption and the final composed policy are all verified.
+    assert checked == [control.base_policy()] * 3
     assert all(args[:2] != ("sandbox", "create") for args in native_calls)
 
 
@@ -1004,3 +1005,32 @@ def test_codex_start_refuses_missing_network_before_any_guest_launch(
     monkeypatch.setattr(control, "login_status", lambda *_: pytest.fail("Login status must not run"))
     with pytest.raises(ValueError, match="Missing reviewed Codex HTTPS permission"):
         control.start(action)
+
+
+def test_setup_blocks_active_guest_before_bootstrap_recovery(
+    interrupted_project_bootstrap, monkeypatch
+):
+    image_id, info = interrupted_project_bootstrap
+    monkeypatch.setattr(control, "preflight", lambda: None)
+    monkeypatch.setattr(control, "image", lambda **_: image_id)
+    monkeypatch.setattr(control, "api", lambda *_: info)
+    monkeypatch.setattr(control, "oshell", lambda *a, **kw: subprocess.CompletedProcess(
+        a, 0, "NAME CREATED PHASE\noma-dev today Ready\n", ""))
+    monkeypatch.setattr(control, "execute", lambda *a, **kw: subprocess.CompletedProcess(a, 0, "1\n", ""))
+    monkeypatch.setattr(control, "verify_interrupted_bootstrap", lambda *_: pytest.fail("Active guest reached recovery"))
+    monkeypatch.setattr(control, "reconcile_github", lambda *_: pytest.fail("Active guest reached provider mutation"))
+    with pytest.raises(ValueError, match="Unmanaged active guest agent"):
+        control.setup("apply")
+    assert not (control.STATE / "state.json").exists()
+
+
+@pytest.mark.parametrize("field,value", [
+    ("host", "other.example.com"), ("port", 80),
+    ("protocol", "sql"), ("enforcement", "audit"), ("access", "read-only"),
+])
+def test_codex_preflight_rejects_inexact_endpoint(codex_preflight_data, field, value):
+    data = codex_preflight_data
+    add_reviewed_codex_rule(data, "auth.openai.com")
+    data["policy"]["network_policies"]["test_auth"]["endpoints"][0][field] = value
+    with pytest.raises(ValueError, match="auth.openai.com:443"):
+        control.require_codex_network(data, ("auth.openai.com",))
