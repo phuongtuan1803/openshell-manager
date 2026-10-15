@@ -349,6 +349,25 @@ def test_status_outage_retries_status_only(setup):
     assert store.rows()[0]['status_sent'] == 1 and len(rpc.mutations) == 1
 
 
+@pytest.mark.parametrize('action', ['approve', 'reject'])
+def test_acknowledgement_failure_preserves_decision_and_advances_cursor(setup, action):
+    _, rpc, _, store, bot, bridge, _ = setup
+    bridge.scan()
+    update = callback(store, bot, action)
+    def expired_query(method, **kwargs):
+        assert method == 'answerCallbackQuery'
+        raise telegram.TelegramError('expired query')
+    bot.call = expired_query
+    with pytest.raises(telegram.TelegramError):
+        bridge.update(update)
+    assert store.rows()[0]['status'] == ('approved' if action == 'approve' else 'rejected')
+    assert store.offset == update['update_id'] + 1
+    bridge.update(update)
+    bridge.update({'update_id': store.offset})
+    assert store.offset == update['update_id'] + 2
+    assert len(rpc.mutations) == 1
+
+
 def test_reject_race_cannot_claim_exact_success(setup):
     _, rpc, _, store, bot, bridge, _ = setup
     bridge.scan(); rpc.reject_race = True

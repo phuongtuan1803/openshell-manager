@@ -218,20 +218,23 @@ def test_telegram_outage_and_restart_review_only(queue, tmp_path):
     assert len(bot.notices) == 2
 
 
-def test_poll_cursor_response_failure_replay(queue, tmp_path):
+def test_poll_cursor_acknowledgement_failure_does_not_block_updates(queue, tmp_path):
     store, _ = queue
     _, token = notice(store)
     worker, bot = bridge(queue, tmp_path)
     bot.fail = True
     with pytest.raises(telegram.TelegramError):
         worker.update(update(token))
-    assert store.offset == 0
-    bot.fail = False
-    worker.update(update(token))
-    assert 'already processed' in bot.answers[-1][1]['text']
     assert store.offset == 1
     count = len(bot.answers)
     worker.update(update(token))
+    assert len(bot.answers) == count
+    bot.fail = False
+    worker.update(update(token, number=1))
+    assert 'already processed' in bot.answers[-1][1]['text']
+    assert store.offset == 2
+    count = len(bot.answers)
+    worker.update(update(token, number=1))
     assert len(bot.answers) == count
 
 

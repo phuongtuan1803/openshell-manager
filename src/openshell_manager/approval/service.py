@@ -244,6 +244,7 @@ class Bridge:
             return
         if update['update_id'] < self.store.offset:
             return
+        callback_id = None
         callback = update.get('callback_query')
         if isinstance(callback, dict):
             sender, message = callback.get('from'), callback.get('message')
@@ -266,10 +267,12 @@ class Bridge:
                 diagnostics.emit('telegram', 'callback_refused', code='unauthorized_callback', status='fail')
                 result = 'Unauthorized; no permission changed'
             callback_id = callback.get('id')
-            if isinstance(callback_id, str) and len(callback_id) <= 256:
-                self.telegram.call('answerCallbackQuery', callback_query_id=callback_id, text=result, show_alert=True)
-        # Persist after handling; replay after a response failure is harmless.
+        # Handling is durable before acknowledging Telegram. An expired query
+        # can never be acknowledged successfully; replaying it would block all
+        # later decisions behind the same failed answerCallbackQuery forever.
         self.store.advance(update['update_id'] + 1)
+        if isinstance(callback_id, str) and len(callback_id) <= 256:
+            self.telegram.call('answerCallbackQuery', callback_query_id=callback_id, text=result, show_alert=True)
 
 
 def serve(cfg, auth, project, host, gateway=None, workspace="default"):

@@ -292,6 +292,11 @@ at most four additional read-only cycles per request, durably counted in the
 existing queue; a permanent mismatch disables further reconciliation. The
 original receipt is retained separately from final confirmation data.
 
+After durable callback handling, the Telegram polling cursor advances before
+`answerCallbackQuery`. An expired or failed acknowledgement cannot keep an old
+callback ahead of later decisions. Decision/status reconciliation remains
+durable and does not replay native mutations.
+
 Failure output includes the failing stage and sanitized invariant/RPC code,
 mutation attempted, receipt received, possible runtime grant, confirmed owned
 sandbox cleanup and the private diagnostic directory. A receipt proves receipt
