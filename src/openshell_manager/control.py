@@ -225,6 +225,46 @@ def ready(info):
     )
 
 
+def verify_interrupted_bootstrap(info, image_id):
+    """Resume only a project-owned, unchanged deny-all bootstrap sandbox."""
+    require(PROFILE is not None, "Unbound existing sandbox; refusing adoption")
+    binding_path = STATE / "project-binding.json"
+    bootstrap_path = STATE / "bootstrap-policy.json"
+    require(
+        binding_path.is_file() and bootstrap_path.is_file(),
+        "Existing sandbox lacks Manager bootstrap evidence; refusing adoption",
+    )
+    binding = {
+        key: str(PROFILE[key])
+        for key in ("id", "root", "repository", "sandbox", "workspace", "manager_revision")
+    }
+    require(
+        read(binding_path) == binding,
+        "Project binding differs from interrupted setup; refusing adoption",
+    )
+    require(
+        read(bootstrap_path) == base_policy(),
+        "Bootstrap policy receipt differs; refusing adoption",
+    )
+    sandbox_id = info.get("id")
+    require(
+        isinstance(sandbox_id, str)
+        and re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", sandbox_id),
+        "Sandbox identity unavailable; refusing bootstrap recovery",
+    )
+    labels = info.get("labels", {})
+    require(
+        labels.get("manager.phase") == "2"
+        and labels.get("manager.project") == PROFILE["id"]
+        and labels.get("manager.image") == image_id.split(":")[1][:32],
+        "Existing sandbox ownership/image differs; refusing adoption",
+    )
+    # Native policy must still be the exact deny-all bootstrap, with manual approval.
+    # This also rejects added provider rules, changed filesystem access and drift.
+    effective(base_policy())
+    print("PASS: interrupted bootstrap verified; resuming existing sandbox")
+
+
 def normalize(policy):
     result = json.loads(json.dumps(policy))
     result.setdefault("network_policies", {})
@@ -241,7 +281,7 @@ def effective(expected=None, github_profile=None):
     ready(info)
     policy = api("policy", "get", NAME, "--full")
     history = api("policy", "list", NAME)
-    composed = any(k.startswith("_provider_") for k in policy["policy"]["network_policies"])
+    composed = any(k.startswith("_provider_") for k in policy["policy"].get("network_policies", {}))
     base = github_provider.base_policy(sys.modules[__name__], policy["policy"], github_profile)
     loaded = any(
         row["version"] == policy["version"]
@@ -625,7 +665,9 @@ def setup(mode):
     image_id = image(check=mode != "apply")
     listing = oshell("sandbox", "list").stdout
     exists = any(line.split() and line.split()[0] == NAME for line in listing.splitlines())
-    require(not exists or (STATE / "state.json").is_file(), "Existing sandbox without bound state; refusing adoption")
+    recovering = exists and not (STATE / "state.json").is_file()
+    if recovering:
+        require(mode == "apply", "Setup incomplete; run setup.sh to resume verified bootstrap")
     if not exists:
         require(mode != "check", "Development sandbox missing; run setup.sh")
         image_ref = NAME + ":" + image_id.split(":")[1][:12]
@@ -669,6 +711,8 @@ def setup(mode):
         probe = (HERE / "session.py").read_text().split('if __name__ == "__main__":')[0]
         active = execute("/usr/bin/python3", "-I", "-c", probe + "\nprint(int(unmanaged_agent()))").stdout.strip()
         require(active == "0", "Unmanaged active guest agent; setup refused")
+    if recovering:
+        verify_interrupted_bootstrap(info, image_id)
     if (STATE / "state.json").exists():
         data = state()
         verify_tools(data)
