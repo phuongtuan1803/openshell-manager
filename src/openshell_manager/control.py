@@ -573,6 +573,58 @@ def verify_tools(data=None):
     return tools
 
 
+CODEX_REQUIRED_HOSTS = ("auth.openai.com", "chatgpt.com")
+
+
+def require_codex_network(data, hosts=CODEX_REQUIRED_HOSTS):
+    """Fail closed before device login/TUI if reviewed Codex HTTPS access is absent.
+
+    This only inspects Manager's verified policy and discovered pinned binaries.
+    It never creates, expands or approves a policy rule.
+    """
+    paths = data["tools"]["binaries"]
+    require(bool(paths) and all(isinstance(p, str) and p.startswith("/") for p in paths),
+            "Pinned Codex executable paths unavailable; run setup --check")
+    policy = data["policy"].get("network_policies", {})
+    missing = []
+    for host in hosts:
+        for executable in paths:
+            permitted = any(
+                not identifier.startswith("_provider_")
+                and any(
+                    endpoint.get("host") == host
+                    and endpoint.get("port") == 443
+                    and endpoint.get("protocol") == "rest"
+                    and endpoint.get("enforcement") == "enforce"
+                    and endpoint.get("access") == "full"
+                    for endpoint in rule.get("endpoints", [])
+                )
+                and any(
+                    (entry.get("path") if isinstance(entry, dict) else entry) == executable
+                    for entry in rule.get("binaries", [])
+                )
+                for identifier, rule in policy.items()
+            )
+            if not permitted:
+                missing.append((host, executable))
+    if missing:
+        detail = "; ".join(f"{host}:443 for {binary}" for host, binary in missing)
+        profile = str(CONFIG) if CONFIG else "project.json"
+        raise ValueError(
+            "Missing reviewed Codex HTTPS permission: " + detail + ". "
+            "Founder approval required: review the private project profile "
+            + profile
+            + " and add explicit rules with agent=codex, access=full, port=443, "
+            "host=auth.openai.com (codex_auth) and/or host=chatgpt.com "
+            "(codex_workspace), with a nonempty review reason. "
+            "For an initialized project run 'openshell-manager rules reconcile' "
+            "(type reconcile to approve the profile change), then "
+            "'openshell-manager setup apply' to apply only those reviewed rules. "
+            "No endpoint has been granted automatically by this check."
+        )
+    return True
+
+
 def login_status(data):
     result = execute(data["tools"]["launcher"], "login", "status", check=False)
     # Ignore all output: it may include account identifiers or API-key fragments.
@@ -868,6 +920,8 @@ def setup(mode):
         update(data, change, confirmation=False)
     effective(data["policy"])
     print("PASS: reviewed policy Loaded and effective; default deny; manual approval")
+    require_codex_network(data)
+    print("PASS: reviewed Codex auth/workspace HTTPS endpoints")
     if mode == "apply":
         guest("prepare_auth")
     if not (STATE / "github-ready.json").exists():
@@ -1372,6 +1426,7 @@ def start(action, model=None, base="main", locked=False):
         github_provider.verify(sys.modules[__name__], data)
         session("launch", argv=["/bin/bash", "--noprofile", "--norc"], base=base, interactive=True)
     elif action == "login":
+        require_codex_network(data, ("auth.openai.com",))
         guest("prepare_auth")
         print(
             "Open the displayed official login URL in the host browser. Enter the device code. "
@@ -1384,6 +1439,7 @@ def start(action, model=None, base="main", locked=False):
             action in settings()["agents"] and settings()["agents"][action]["enabled"],
             "Agent adapter not enabled; Claude Code/OpenCode need reviewed pins and policies",
         )
+        require_codex_network(data)
         if not login_status(data):
             start("login", locked=locked)
         github_provider.verify(sys.modules[__name__], data)
