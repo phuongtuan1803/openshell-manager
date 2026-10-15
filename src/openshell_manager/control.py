@@ -756,13 +756,21 @@ def migrate_revision(project, host, previous_revision):
                 if backup.exists():
                     require(read(backup) == old, "Existing migration backup mismatch")
                 else:
-                    with backup.open("x") as output:
+                    descriptor = os.open(backup, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                    with os.fdopen(descriptor, "w") as output:
                         json.dump(old, output, indent=2)
                         output.write("\n")
-                    backup.chmod(0o600)
                 save(path, wanted)
 
     print("PASS: verified Manager revision migrated; sandbox/state/policy preserved")
+
+
+def reconcile_github(data, mode):
+    """Report the failing setup stage without exposing provider response or secrets."""
+    try:
+        return github_provider.reconcile(sys.modules[__name__], data, mode)
+    except (KeyError, TypeError):
+        raise ValueError("GitHub Provider response schema mismatch; inspect native API compatibility") from None
 
 
 def setup(mode):
@@ -835,7 +843,7 @@ def setup(mode):
     if (STATE / "state.json").exists():
         data = state()
         verify_tools(data)
-        github_provider.reconcile(sys.modules[__name__], data, mode)
+        reconcile_github(data, mode)
     else:
         require(mode != "check", "Setup incomplete; rerun setup.sh")
         baseline = base_policy()
@@ -864,7 +872,7 @@ def setup(mode):
     if mode == "apply":
         guest("prepare_auth")
     if not (STATE / "github-ready.json").exists():
-        github_provider.reconcile(sys.modules[__name__], data, mode)
+        reconcile_github(data, mode)
     synced = sync_checkout(check=mode == "check")
     if synced["state"] != "active-agent":
         help_result = execute(
