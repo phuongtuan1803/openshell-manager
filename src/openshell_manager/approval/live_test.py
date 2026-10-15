@@ -12,6 +12,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 import warnings
@@ -82,29 +83,77 @@ def select_gateway(requested=None):
         raise Blocked('Existing Gateway metadata/mTLS/health failed validation. Require local HTTPS, owned 0700 mtls and 0600 certificates/key; no credentials changed.') from None
 
 
+def image_review(image, recipe, version):
+    """Inspect/run only an immutable digest, without network, mounts or credentials."""
+    need(bool(re.fullmatch(r'sha256:[a-f0-9]{64}', image)) and image != 'sha256:' + '0' * 64,
+         'Test image build returned an invalid digest.')
+    info = json.loads(run(['docker', 'image', 'inspect', image]))
+    need(len(info) == 1 and info[0]['Id'] == image
+         and (info[0]['Config'].get('Labels') or {}).get('manager.dockerfile') == recipe,
+         'Test image digest or packaged Dockerfile label mismatch; image preserved.')
+    restricted = ['docker', 'run', '--rm', '--network', 'none', '--read-only',
+                  '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--entrypoint']
+    actual = run([*restricted, '/usr/local/bin/codex', image, '--version']).strip()
+    need(actual == version, 'Test image pinned Codex version mismatch; image preserved.')
+    inventory = run([*restricted, '/usr/bin/dpkg-query', image, '-W']).splitlines()
+    packages = {}
+    for line in inventory:
+        fields = line.split('\t')
+        need(len(fields) == 2 and re.fullmatch(r'[a-z0-9][a-z0-9+.:~-]*', fields[0])
+             and bool(fields[1].strip()) and fields[0] not in packages,
+             'Test image package inventory is invalid; no review receipt recorded.')
+        packages[fields[0]] = fields[1]
+    required = {'ca-certificates', 'curl', 'git', 'nodejs', 'npm', 'python3', 'python3-venv', 'python3-pytest'}
+    need(required <= {name.split(':')[0] for name in packages},
+         'Test image package inventory lacks required reviewed tools; no review receipt recorded.')
+    return {'image_id': image, 'dockerfile_sha256': recipe, 'codex_version': actual,
+            'inventory': sorted(inventory)}
+
+
 def reviewed_image(state_root):
-    """Require existing review receipt AND the shipped recipe label AND actual digest."""
-    recipe = control.digest((RESOURCES / 'docker/Dockerfile').read_bytes())
+    """Reuse verified receipts, or build an untagged dedicated test image."""
+    source = (RESOURCES / 'docker/Dockerfile').read_bytes()
+    recipe = control.digest(source)
     version = configuration.file(configuration.DEFAULTS)['codex_version']
-    candidates = [state_root / 'built-image-review.json', *sorted(state_root.glob('*/built-image-review.json'))]
-    matches = set()
-    for path in candidates:
+    own = private(state_root / 'approval-live', directory=True, create=True)
+    receipt_path = own / 'built-image-review.json'
+    candidates = [receipt_path, state_root / 'built-image-review.json',
+                  *sorted(state_root.glob('*/built-image-review.json'))]
+    for path in dict.fromkeys(candidates):
         if not path.exists():
             continue
         try:
             receipt = configuration.file(private(path))
-            image = receipt.get('image_id', '')
-            if (not re.fullmatch(r'sha256:[a-f0-9]{64}', image) or image == 'sha256:' + '0' * 64
-                    or receipt.get('dockerfile_sha256') != recipe or receipt.get('codex_version') != version):
+            if receipt.get('dockerfile_sha256') != recipe or receipt.get('codex_version') != version:
                 continue
-            info = json.loads(run(['docker', 'image', 'inspect', image]))
-            if (len(info) == 1 and info[0]['Id'] == image
-                    and info[0]['Config'].get('Labels', {}).get('manager.dockerfile') == recipe):
-                matches.add(image)
-        except (ValueError, OSError, KeyError, TypeError):
+            verified = image_review(receipt.get('image_id', ''), recipe, version)
+            if sorted(receipt.get('inventory', [])) != verified['inventory']:
+                continue
+            say('PASS', 'Reviewed test image reused: ' + verified['image_id'])
+            return verified['image_id']
+        except (ValueError, OSError, KeyError, TypeError, subprocess.TimeoutExpired):
             continue
-    need(len(matches) == 1, 'Require one locally available reviewed image: private built-image-review.json under ~/.local/state/openshell-manager[/PROJECT], matching the shipped Dockerfile, pinned Codex and Docker digest/label. No image is built or guessed.')
-    return matches.pop()
+    # No tag is ever written, inspected or removed: existing OMA images are untouched.
+    if receipt_path.exists() or receipt_path.is_symlink():
+        private(receipt_path)
+    say('WAIT', 'Building dedicated test image from packaged Dockerfile (up to 30 minutes)')
+    try:
+        with tempfile.TemporaryDirectory(prefix='manager-approval-image-') as temp:
+            context = Path(temp) / 'context'
+            context.mkdir(mode=0o700)
+            dockerfile = context / 'Dockerfile'
+            dockerfile.write_bytes(source)
+            need(control.digest(dockerfile.read_bytes()) == recipe, 'Packaged Dockerfile copy hash mismatch.')
+            iid = Path(temp) / 'image-id'
+            run(['docker', 'build', '--label', 'manager.dockerfile=' + recipe,
+                 '--iidfile', str(iid), str(context)], timeout=1800)
+            verified = image_review(iid.read_text().strip(), recipe, version)
+        control.save(receipt_path, verified)
+        private(receipt_path)
+    except (ValueError, OSError, KeyError, TypeError, subprocess.TimeoutExpired):
+        raise Blocked('Dedicated test image build/verification failed. Check Docker, registry/APT/npm connectivity and disk space, then rerun approval test. No new receipt recorded; existing images preserved.') from None
+    say('PASS', 'Dedicated test image verified; private review receipt recorded')
+    return verified['image_id']
 
 
 def bot_config(path):

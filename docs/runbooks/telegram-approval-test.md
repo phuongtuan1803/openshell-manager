@@ -81,14 +81,25 @@ upgrades them:
 - An existing workspace: `default` is preferred, or a sole discovered workspace.
   Ambiguity requires explicit `--gateway NAME` / `--gateway-workspace NAME` options.
   No workspace or active Gateway configuration is changed.
-- **An existing reviewed local image.** Discovery requires exactly one digest
-  represented by an existing private `built-image-review.json` in
-  `~/.local/state/openshell-manager/` or one of its immediate project directories.
-  Its Dockerfile hash must match the packaged recipe, Codex must match the pinned
-  version, and Docker inspection must confirm the exact digest and recipe label.
-  No image digest, review receipt, build or permission grant is invented. If this
-  record/image is absent or ambiguous, the command explains the blocker; an
-  operator must separately establish the reviewed prerequisite.
+- **Docker image preparation is automatic.** The command first searches private
+  `built-image-review.json` receipts in the Manager state root and its immediate
+  project directories, preferring `approval-live/built-image-review.json`. It
+  rechecks the actual immutable image digest, packaged Dockerfile hash/label,
+  pinned Codex version and matching package inventory before reuse. An OMA image
+  with Codex alone, but no recipe label/receipt, is insufficient.
+  If no fully verified image is available, it builds a dedicated **untagged** test
+  image from the packaged, reviewed Manager Dockerfile. The temporary build context
+  contains only that Dockerfile; the OMA checkout and host credentials are never
+  sent to Docker. First build requires registry/APT/npm connectivity, Docker disk
+  space and up to 30 minutes; progress is shown as a bounded WAIT, with raw build
+  output withheld. The base and Codex remain pinned; APT/npm dependencies are not
+  snapshot locked, so the actual digest and `dpkg-query -W` inventory are recorded.
+  Digest/recipe-label inspection and network-disabled, read-only Codex/inventory
+  checks must all pass before a genuine mode-0600 receipt is saved at
+  `~/.local/state/openshell-manager/approval-live/built-image-review.json`.
+  Subsequent runs reverify and reuse it. No existing OMA image is relabeled,
+  overwritten, rebuilt or deleted. The dedicated image and private receipt are
+  retained after sandbox cleanup for reuse.
 - The public HTTPS endpoint `https://example.com/` must return HTTP 200 through
   the approved exact rule. DNS/TLS/outage/upstream errors are failures, not proof
   of permission. No redirects, credentials, query strings or request bodies are
@@ -113,9 +124,10 @@ name/endpoint/CA identity is checked against the verified adapter before copying
 Those temporary host-only copies are removed on normal exit/Ctrl-C, including
 failed tests; no new keys are generated and the real registry/last selection is
 untouched. The bridge and parent adapter continue to use the original registry.
-The reviewed image is referenced by its actual local digest; no image/tag is created or removed.
+The verified image is referenced by its actual local digest. Only the dedicated
+untagged fallback image may be built; existing images/tags are never changed or removed.
 
-Timeouts: host checks generally 60 seconds; creation 600 seconds, subsequent Ready
+Timeouts: host checks generally 60 seconds; first image build 1800 seconds; creation 600 seconds, subsequent Ready
 180 seconds, admission 120 seconds, bridge health/notification 90 seconds,
 Founder decision 14 minutes within the bridge's 15-minute TTL, guest reload
 30 seconds, and deletion confirmation 120 seconds. Guest exec has native 35-second
@@ -141,6 +153,12 @@ explicit continued denial and confirmed cleanup. `FAIL` means an attempted test
 or cleanup did not meet its checks. `BLOCKED` identifies a missing/untrusted
 prerequisite. Exit codes are 0 / 1 / 2, or 130 for Ctrl-C when cleanup completes.
 An interruption with failed cleanup returns 1.
+
+If image preparation reports BLOCKED, check Docker daemon access, free disk space
+and base-registry/APT/npm connectivity, then rerun the same command. Failed builds
+or verification never create a new review receipt or fall back to the unverified
+OMA tag. A failed build may leave Docker cache or an unreviewed untagged image;
+the command does not delete images or prune shared Docker storage.
 
 Private fixture/config, SQLite audit and a sanitized `result.json` are retained
 under the normal Manager state directory for diagnosis; the final output gives

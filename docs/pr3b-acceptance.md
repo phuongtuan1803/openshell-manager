@@ -123,7 +123,7 @@ activation, active host mutation, real credential creation or PR/merge occurred.
 
 `openshell-manager approval test` now orchestrates the existing bridge and adapter.
 It proves the running revision before state/native actions, validates the pinned
-CLI exec contract and existing local Gateway/mTLS/workspace, requires a real
+CLI exec contract and existing local Gateway/mTLS/workspace, verifies or prepares a
 reviewed local image receipt/digest/recipe, generates strict isolated profiles and
 a standalone local Git fixture, and creates a fresh owned `tg-<hex>-dev` sandbox.
 No existing sandbox is adopted. Every exec, sandbox-local proposal setting and
@@ -188,3 +188,28 @@ side effect is verified in the immutable
 [exec handler](https://github.com/NVIDIA/OpenShell/blob/6648bd0c290efbc41ba131ee9831ee45cd431f94/crates/openshell-cli/src/main.rs#L3594);
 [test source references](runbooks/telegram-approval-test.md) cover the other native
 execution/lifecycle contracts.
+
+## Image-preflight correction (offline evidence)
+
+The one-command test now revalidates existing receipt/digest/recipe-label, pinned
+Codex and full package inventory before reuse. If none qualifies, it builds an
+untagged dedicated image from only the packaged Dockerfile in an otherwise empty
+temporary context. Docker's actual `--iidfile` digest is inspected and the pinned
+Codex and required package inventory are checked in network-disabled, read-only
+containers before saving the private `approval-live/built-image-review.json`.
+No existing OMA image tag, receipt or Gateway configuration is changed. Failed
+builds/verifications cannot produce a new receipt; shared Docker storage is never
+pruned. This replaces the previous separately established image prerequisite.
+
+- Focused offline orchestration suite: **71 passed** (`tests/test_approval_live.py`).
+  Includes missing receipt/first build, verified reuse, incompatible existing
+  recipe/digest/label/version/inventory, missing image and build/timeout/validation
+  failures. Tests mock Docker and check the Dockerfile-only context and absence
+  of tag writes or image removal.
+- Complete offline suite: **470 passed, 16 skipped** in 42.84 seconds.
+  Skips remain the explicitly gated live agent evaluations.
+- `uv build --offline`: wheel and sdist PASS. `tools/verify_packaging.py`: PASS
+  (38 wheel files, 87 sdist files, 12 reviewed hashes; isolated local Git install).
+- Live Docker build and native/Telegram acceptance: **SKIP**. No host Docker,
+  Gateway, sandbox, image or credential operations were executed. **B15 remains
+  SKIP**; mocked image preparation is not live approval evidence.

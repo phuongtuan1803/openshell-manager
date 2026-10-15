@@ -129,24 +129,102 @@ def test_bot_prerequisites_fail_closed(monkeypatch, tmp_path, failure):
     with pytest.raises(ValueError): live.bot_config(path)
 
 
-def test_image_requires_receipt_recipe_and_actual_digest(monkeypatch, tmp_path):
+@pytest.fixture
+def image_host(monkeypatch):
+    image = 'sha256:' + 'e' * 64
     recipe = control.digest((live.RESOURCES / 'docker/Dockerfile').read_bytes())
-    receipt = tmp_path / 'built-image-review.json'
-    digest = 'sha256:' + 'e' * 64
-    control.save(receipt, {'image_id': digest, 'dockerfile_sha256': recipe, 'codex_version': 'codex-cli 0.162.1'})
-    monkeypatch.setattr(live, 'run', lambda args: json.dumps([{'Id': digest, 'Config': {'Labels': {'manager.dockerfile': recipe}}}]))
-    assert live.reviewed_image(tmp_path) == digest
-    receipt.unlink()
-    with pytest.raises(live.Blocked, match='reviewed image'): live.reviewed_image(tmp_path)
+    inventory = [name + '\t1.0' for name in
+                 ['ca-certificates', 'curl', 'git', 'nodejs', 'npm', 'python3', 'python3-venv', 'python3-pytest']]
+    calls = []
+    def execute(args, timeout=60):
+        calls.append(args)
+        if args[:2] == ['docker', 'build']:
+            assert timeout == 1800
+            assert '-t' not in args and '--tag' not in args
+            context = Path(args[-1])
+            assert sorted(p.name for p in context.iterdir()) == ['Dockerfile']
+            assert (context / 'Dockerfile').read_bytes() == (live.RESOURCES / 'docker/Dockerfile').read_bytes()
+            assert args[args.index('--label') + 1] == 'manager.dockerfile=' + recipe
+            Path(args[args.index('--iidfile') + 1]).write_text(image + '\n')
+            return ''
+        if args[:3] == ['docker', 'image', 'inspect']:
+            assert args[-1] == image
+            return json.dumps([{'Id': image, 'Config': {'Labels': {'manager.dockerfile': recipe}}}])
+        assert args[:2] == ['docker', 'run']
+        assert args[args.index('--network') + 1] == 'none'
+        assert '--read-only' in args and '--rm' in args and '-v' not in args and '-e' not in args
+        assert args[-2] == image
+        return 'codex-cli 0.162.1\n' if args[-1] == '--version' else '\n'.join(inventory)
+    monkeypatch.setattr(live, 'run', execute)
+    return SimpleNamespace(image=image, recipe=recipe, inventory=sorted(inventory), calls=calls, run=execute)
 
 
-@pytest.mark.parametrize('field,value', [('image_id', 'sha256:' + '0' * 64), ('dockerfile_sha256', 'wrong'), ('codex_version', 'newer')])
-def test_unreviewed_images_never_trigger_docker(monkeypatch, tmp_path, field, value):
-    receipt = {'image_id': 'sha256:' + 'e' * 64, 'dockerfile_sha256': control.digest((live.RESOURCES / 'docker/Dockerfile').read_bytes()), 'codex_version': 'codex-cli 0.162.1'}
-    receipt[field] = value
-    control.save(tmp_path / 'built-image-review.json', receipt)
-    monkeypatch.setattr(live, 'run', lambda args: pytest.fail('Unreviewed image must not be used'))
-    with pytest.raises(live.Blocked): live.reviewed_image(tmp_path)
+def test_image_missing_receipt_builds_then_reuses_private_review(tmp_path, image_host):
+    assert live.reviewed_image(tmp_path) == image_host.image
+    path = tmp_path / 'approval-live/built-image-review.json'
+    receipt = json.loads(private(path).read_text())
+    assert receipt == {'image_id': image_host.image, 'dockerfile_sha256': image_host.recipe,
+                       'codex_version': 'codex-cli 0.162.1', 'inventory': image_host.inventory}
+    assert not Path(image_host.calls[0][-1]).exists()  # Empty context removed.
+    image_host.calls.clear()
+    assert live.reviewed_image(tmp_path) == image_host.image
+    assert not any(args[1] == 'build' for args in image_host.calls)
+
+
+def test_image_existing_verified_project_receipt_reused(tmp_path, image_host):
+    control.save(tmp_path / 'project/built-image-review.json', {
+        'image_id': image_host.image, 'dockerfile_sha256': image_host.recipe,
+        'codex_version': 'codex-cli 0.162.1', 'inventory': image_host.inventory})
+    assert live.reviewed_image(tmp_path) == image_host.image
+    assert all(args[1] != 'build' for args in image_host.calls)
+
+
+@pytest.mark.parametrize('mismatch', ['recipe', 'digest', 'label', 'version', 'inventory', 'missing'])
+def test_image_incompatible_existing_receipt_builds_without_mutating_existing(monkeypatch, tmp_path, image_host, mismatch):
+    old = 'sha256:' + 'a' * 64
+    path = tmp_path / 'old-project/built-image-review.json'
+    receipt = {'image_id': old, 'dockerfile_sha256': image_host.recipe,
+               'codex_version': 'codex-cli 0.162.1', 'inventory': image_host.inventory}
+    if mismatch == 'recipe': receipt['dockerfile_sha256'] = 'outdated'
+    control.save(path, receipt)
+    original = path.read_bytes()
+    def execute(args, timeout=60):
+        if old in args:
+            if args[1] == 'image':
+                if mismatch == 'missing': raise live.Blocked('not found')
+                return json.dumps([{'Id': 'sha256:' + '0' * 64 if mismatch == 'digest' else old,
+                                   'Config': {'Labels': {} if mismatch == 'label' else {'manager.dockerfile': image_host.recipe}}}])
+            return ('codex-cli wrong' if mismatch == 'version' else 'codex-cli 0.162.1') if args[-1] == '--version' else 'curl\t1'
+        return image_host.run(args, timeout)
+    monkeypatch.setattr(live, 'run', execute)
+    assert live.reviewed_image(tmp_path) == image_host.image
+    assert path.read_bytes() == original
+    assert any(args[1] == 'build' for args in image_host.calls)
+    assert all(args[1] in {'build', 'image', 'run'} for args in image_host.calls)
+
+
+@pytest.mark.parametrize('failure', ['build', 'timeout', 'iid', 'label', 'digest', 'version', 'inventory', 'empty-inventory'])
+def test_image_build_failure_never_records_review(monkeypatch, tmp_path, image_host, failure):
+    def execute(args, timeout=60):
+        if args[1] == 'build':
+            if failure == 'build': raise live.Blocked('private command output must not leak')
+            if failure == 'timeout': raise subprocess.TimeoutExpired(args, timeout)
+            result = image_host.run(args, timeout)
+            if failure == 'iid': Path(args[args.index('--iidfile') + 1]).write_text('invented')
+            return result
+        if args[1] == 'image' and failure in {'label', 'digest'}:
+            return json.dumps([{'Id': 'wrong' if failure == 'digest' else image_host.image,
+                               'Config': {'Labels': {}}}])
+        if args[-1] == '--version' and failure == 'version': return 'codex-cli 0.999'
+        if args[-1] == '-W' and failure in {'inventory', 'empty-inventory'}:
+            return 'unstructured output' if failure == 'inventory' else ''
+        return image_host.run(args, timeout)
+    monkeypatch.setattr(live, 'run', execute)
+    with pytest.raises(live.Blocked, match='build/verification failed') as error:
+        live.reviewed_image(tmp_path)
+    assert 'private command output' not in str(error.value)
+    assert not (tmp_path / 'approval-live/built-image-review.json').exists()
+
 
 
 def sandbox(test, *, id='owned-uuid', marker=None, name=None):
