@@ -44,8 +44,10 @@ def environment(source=None):
     # A stateless helper passes the native Provider placeholder through a private
     # pipe. Git constructs the same Basic header already accepted by OpenShell.
     # Config inspection exposes only helper code, never the credential or header.
+    # OpenShell supplies its proxy trust bundle through GIT_SSL_CAINFO. Keep
+    # that path while removing inherited Git config, tracing and TLS bypasses.
     for key in list(env):
-        if key.startswith(("GIT_", "GCM_")):
+        if key.startswith(("GIT_", "GCM_")) and key != "GIT_SSL_CAINFO":
             del env[key]
     values = [
         ("credential.helper", ""),
@@ -127,12 +129,16 @@ def unmanaged_agent():
         try:
             argv = (item / "cmdline").read_bytes().split(b"\0")
             if any(
-                Path(arg.decode(errors="ignore")).name in {"codex", "claude", "opencode"}
+                Path(arg.decode(errors="ignore")).name in {"codex", "codex.js", "claude", "opencode"}
                 for arg in argv[:2]
             ):
                 return True
-        except (OSError, ValueError):
+        except (FileNotFoundError, ProcessLookupError):
+            # A process may exit between listing /proc and reading cmdline.
             continue
+        except (OSError, ValueError):
+            # Unreadable process metadata cannot establish an idle guest.
+            return True
     return False
 
 

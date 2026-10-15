@@ -225,6 +225,46 @@ def ready(info):
     )
 
 
+def verify_interrupted_bootstrap(info, image_id):
+    """Resume only a project-owned, unchanged deny-all bootstrap sandbox."""
+    require(PROFILE is not None, "Unbound existing sandbox; refusing adoption")
+    binding_path = STATE / "project-binding.json"
+    bootstrap_path = STATE / "bootstrap-policy.json"
+    require(
+        binding_path.is_file() and bootstrap_path.is_file(),
+        "Existing sandbox lacks Manager bootstrap evidence; refusing adoption",
+    )
+    binding = {
+        key: str(PROFILE[key])
+        for key in ("id", "root", "repository", "sandbox", "workspace", "manager_revision")
+    }
+    require(
+        read(binding_path) == binding,
+        "Project binding differs from interrupted setup; refusing adoption",
+    )
+    require(
+        read(bootstrap_path) == base_policy(),
+        "Bootstrap policy receipt differs; refusing adoption",
+    )
+    sandbox_id = info.get("id")
+    require(
+        isinstance(sandbox_id, str)
+        and re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", sandbox_id),
+        "Sandbox identity unavailable; refusing bootstrap recovery",
+    )
+    labels = info.get("labels", {})
+    require(
+        labels.get("manager.phase") == "2"
+        and labels.get("manager.project") == PROFILE["id"]
+        and labels.get("manager.image") == image_id.split(":")[1][:32],
+        "Existing sandbox ownership/image differs; refusing adoption",
+    )
+    # Native policy must still be the exact deny-all bootstrap, with manual approval.
+    # This also rejects added provider rules, changed filesystem access and drift.
+    effective(base_policy())
+    print("PASS: interrupted bootstrap verified; resuming existing sandbox")
+
+
 def normalize(policy):
     result = json.loads(json.dumps(policy))
     result.setdefault("network_policies", {})
@@ -241,7 +281,7 @@ def effective(expected=None, github_profile=None):
     ready(info)
     policy = api("policy", "get", NAME, "--full")
     history = api("policy", "list", NAME)
-    composed = any(k.startswith("_provider_") for k in policy["policy"]["network_policies"])
+    composed = any(k.startswith("_provider_") for k in policy["policy"].get("network_policies", {}))
     base = github_provider.base_policy(sys.modules[__name__], policy["policy"], github_profile)
     loaded = any(
         row["version"] == policy["version"]
@@ -533,6 +573,58 @@ def verify_tools(data=None):
     return tools
 
 
+CODEX_REQUIRED_HOSTS = ("auth.openai.com", "chatgpt.com")
+
+
+def require_codex_network(data, hosts=CODEX_REQUIRED_HOSTS):
+    """Fail closed before device login/TUI if reviewed Codex HTTPS access is absent.
+
+    This only inspects Manager's verified policy and discovered pinned binaries.
+    It never creates, expands or approves a policy rule.
+    """
+    paths = data["tools"]["binaries"]
+    require(bool(paths) and all(isinstance(p, str) and p.startswith("/") for p in paths),
+            "Pinned Codex executable paths unavailable; run setup --check")
+    policy = data["policy"].get("network_policies", {})
+    missing = []
+    for host in hosts:
+        for executable in paths:
+            permitted = any(
+                not identifier.startswith("_provider_")
+                and any(
+                    endpoint.get("host") == host
+                    and endpoint.get("port") == 443
+                    and endpoint.get("protocol") == "rest"
+                    and endpoint.get("enforcement") == "enforce"
+                    and endpoint.get("access") == "full"
+                    for endpoint in rule.get("endpoints", [])
+                )
+                and any(
+                    (entry.get("path") if isinstance(entry, dict) else entry) == executable
+                    for entry in rule.get("binaries", [])
+                )
+                for identifier, rule in policy.items()
+            )
+            if not permitted:
+                missing.append((host, executable))
+    if missing:
+        detail = "; ".join(f"{host}:443 for {binary}" for host, binary in missing)
+        profile = str(CONFIG) if CONFIG else "project.json"
+        raise ValueError(
+            "Missing reviewed Codex HTTPS permission: " + detail + ". "
+            "Founder approval required: review the private project profile "
+            + profile
+            + " and add explicit rules with agent=codex, access=full, port=443, "
+            "host=auth.openai.com (codex_auth) and/or host=chatgpt.com "
+            "(codex_workspace), with a nonempty review reason. "
+            "For an initialized project run 'openshell-manager rules reconcile' "
+            "(type reconcile to approve the profile change), then "
+            "'openshell-manager setup apply' to apply only those reviewed rules. "
+            "No endpoint has been granted automatically by this check."
+        )
+    return True
+
+
 def login_status(data):
     result = execute(data["tools"]["launcher"], "login", "status", check=False)
     # Ignore all output: it may include account identifiers or API-key fragments.
@@ -606,6 +698,132 @@ def refresh(data, names=None):
     print(f"PASS: committed snapshot {provenance['commit'][:12]} ready; prior work preserved")
 
 
+def migrate_revision(project, host, previous_revision, expected_revision):
+    """Explicit state-preserving migration between verified immutable Manager revisions.
+
+    No sandbox, provider, policy, credential or workspace mutations occur here.
+    """
+    from . import configuration
+
+    require(provenance.sha(previous_revision), "Invalid previous Manager revision")
+    target_revision = provenance.verify(expected_revision)
+    require(previous_revision != target_revision, "Manager already pinned to this revision")
+    cfg = configuration.load(project, host)
+    require(cfg["manager_revision"] in {previous_revision, target_revision},
+            "Unexpected project revision; migration refused")
+    root = Path(cfg["state"])
+    require(root.is_dir() and root.resolve() == root.absolute(),
+            "Missing or unsafe Manager state directory")
+    project_path = Path(project).absolute()
+    binding_path = root / "project-binding.json"
+    state_path = root / "state.json"
+    bootstrap_path = root / "bootstrap-policy.json"
+    require(bootstrap_path.is_file() and not bootstrap_path.is_symlink(),
+            "Missing Manager bootstrap receipt; migration refused")
+    require(read(bootstrap_path) == base_policy(),
+            "Bootstrap receipt drift; migration refused")
+
+    def config_digest(revision):
+        normalized = dict(cfg)
+        normalized["manager_revision"] = revision
+        return digest(json.dumps(normalized, sort_keys=True, default=str).encode()
+                      + Path(cfg["source_manifest"]).read_bytes()
+                      + Path(cfg["edit_scope"]).read_bytes())
+
+    old_hash, new_hash = config_digest(previous_revision), config_digest(target_revision)
+    expected_binding = {
+        key: str(cfg[key])
+        for key in ("id", "root", "repository", "sandbox", "workspace", "manager_revision")
+    }
+    expected_binding["manager_revision"] = previous_revision
+    next_binding = {**expected_binding, "manager_revision": target_revision}
+    require(not any(p.is_symlink() for p in (project_path, binding_path, state_path)),
+            "Symlink in revision migration input; refused")
+    require(project_path.is_file() and binding_path.is_file(),
+            "Project profile or binding missing; migration refused")
+    lock_path = root / "operation.lock"
+    task_path = root / "task.lock"
+    require(not lock_path.is_symlink() and not task_path.is_symlink(),
+            "Unsafe Manager operation/task lock")
+    with lock_path.open("a") as operation:
+        try:
+            fcntl.flock(operation, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError("Active Manager operation; pin migration refused") from None
+        with task_path.open("a") as task:
+            try:
+                fcntl.flock(task, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise ValueError("Active Manager task; pin migration refused") from None
+
+            profile = configuration.file(project_path)
+            require(profile.get("manager_revision") in {previous_revision, target_revision},
+                    "Project pin changed concurrently; migration refused")
+            binding = read(binding_path)
+            require(binding in (expected_binding, next_binding),
+                    "Manager project binding drift; migration refused")
+            state_data = read(state_path) if state_path.exists() else None
+            if state_data is not None:
+                require(state_data.get("config_hash") in {old_hash, new_hash}
+                        and isinstance(state_data.get("sandbox_id"), str),
+                        "State configuration/identity drift; migration refused")
+
+            info = api("sandbox", "get", cfg["sandbox"])
+            require(
+                info.get("name") == cfg["sandbox"]
+                and info.get("phase") == "Ready"
+                and info.get("configuration_admission", {}).get("state") == "accepted"
+                and info.get("labels", {}).get("manager.phase") == "2"
+                and info.get("labels", {}).get("manager.project") == cfg["id"]
+                and info.get("labels", {}).get("manager.image") == cfg["image_id"][7:39]
+                and (state_data is None or state_data["sandbox_id"] == info.get("id")),
+                "Sandbox identity/image/ownership differs; migration refused",
+            )
+
+            next_profile = {**profile, "manager_revision": target_revision}
+            if state_data is not None:
+                next_state = {**state_data, "config_hash": new_hash}
+            else:
+                next_state = None
+
+            for path, current, wanted in (
+                (project_path, profile, next_profile),
+                (binding_path, binding, next_binding),
+                (state_path, state_data, next_state),
+            ):
+                if current is None or current == wanted:
+                    continue
+                # Verify backup content against the *old* revision, including
+                # retries after a partially completed migration.
+                old = dict(current)
+                if path == project_path:
+                    old["manager_revision"] = previous_revision
+                elif path == binding_path:
+                    old = expected_binding
+                else:
+                    old["config_hash"] = old_hash
+                backup = path.with_name(path.name + ".before-" + previous_revision[:12])
+                require(not backup.is_symlink(), "Unsafe migration backup")
+                if backup.exists():
+                    require(read(backup) == old, "Existing migration backup mismatch")
+                else:
+                    descriptor = os.open(backup, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                    with os.fdopen(descriptor, "w") as output:
+                        json.dump(old, output, indent=2)
+                        output.write("\n")
+                save(path, wanted)
+
+    print("PASS: verified Manager revision migrated; sandbox/state/policy preserved")
+
+
+def reconcile_github(data, mode):
+    """Report the failing setup stage without exposing provider response or secrets."""
+    try:
+        return github_provider.reconcile(sys.modules[__name__], data, mode)
+    except (KeyError, TypeError):
+        raise ValueError("GitHub Provider response schema mismatch; inspect native API compatibility") from None
+
+
 def setup(mode):
     if mode == "dry-run":
         print("STATUS  CHECK                 FIX / PLAN")
@@ -625,7 +843,15 @@ def setup(mode):
     image_id = image(check=mode != "apply")
     listing = oshell("sandbox", "list").stdout
     exists = any(line.split() and line.split()[0] == NAME for line in listing.splitlines())
-    require(not exists or (STATE / "state.json").is_file(), "Existing sandbox without bound state; refusing adoption")
+    recovering = exists and not (STATE / "state.json").is_file()
+    if recovering:
+        require(mode == "apply", "Setup incomplete; run setup.sh to resume verified bootstrap")
+        require(
+            PROFILE is not None
+            and (STATE / "project-binding.json").is_file()
+            and (STATE / "bootstrap-policy.json").is_file(),
+            "Existing sandbox lacks Manager bootstrap evidence; refusing adoption",
+        )
     if not exists:
         require(mode != "check", "Development sandbox missing; run setup.sh")
         image_ref = NAME + ":" + image_id.split(":")[1][:12]
@@ -669,10 +895,12 @@ def setup(mode):
         probe = (HERE / "session.py").read_text().split('if __name__ == "__main__":')[0]
         active = execute("/usr/bin/python3", "-I", "-c", probe + "\nprint(int(unmanaged_agent()))").stdout.strip()
         require(active == "0", "Unmanaged active guest agent; setup refused")
+    if recovering:
+        verify_interrupted_bootstrap(info, image_id)
     if (STATE / "state.json").exists():
         data = state()
         verify_tools(data)
-        github_provider.reconcile(sys.modules[__name__], data, mode)
+        reconcile_github(data, mode)
     else:
         require(mode != "check", "Setup incomplete; rerun setup.sh")
         baseline = base_policy()
@@ -698,10 +926,12 @@ def setup(mode):
         update(data, change, confirmation=False)
     effective(data["policy"])
     print("PASS: reviewed policy Loaded and effective; default deny; manual approval")
+    require_codex_network(data)
+    print("PASS: reviewed Codex auth/workspace HTTPS endpoints")
     if mode == "apply":
         guest("prepare_auth")
     if not (STATE / "github-ready.json").exists():
-        github_provider.reconcile(sys.modules[__name__], data, mode)
+        reconcile_github(data, mode)
     synced = sync_checkout(check=mode == "check")
     if synced["state"] != "active-agent":
         help_result = execute(
@@ -1202,6 +1432,7 @@ def start(action, model=None, base="main", locked=False):
         github_provider.verify(sys.modules[__name__], data)
         session("launch", argv=["/bin/bash", "--noprofile", "--norc"], base=base, interactive=True)
     elif action == "login":
+        require_codex_network(data, ("auth.openai.com",))
         guest("prepare_auth")
         print(
             "Open the displayed official login URL in the host browser. Enter the device code. "
@@ -1214,6 +1445,7 @@ def start(action, model=None, base="main", locked=False):
             action in settings()["agents"] and settings()["agents"][action]["enabled"],
             "Agent adapter not enabled; Claude Code/OpenCode need reviewed pins and policies",
         )
+        require_codex_network(data)
         if not login_status(data):
             start("login", locked=locked)
         github_provider.verify(sys.modules[__name__], data)
@@ -1230,7 +1462,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",
-        choices=["setup", "start", "run", "github", "refresh", "export", "rules", "cleanup"],
+        choices=["setup", "start", "run", "github", "refresh", "export", "rules", "cleanup", "migrate"],
     )
     parser.add_argument("action", nargs="?", default="")
     parser.add_argument("id", nargs="?", default="")
@@ -1244,6 +1476,8 @@ def main(argv=None):
     parser.add_argument("--publish", metavar="FEATURE_BRANCH")
     parser.add_argument("--project", type=Path, default=os.environ.get("MANAGER_PROJECT"))
     parser.add_argument("--host", type=Path, default=os.environ.get("MANAGER_HOST"))
+    parser.add_argument("--from-revision")
+    parser.add_argument("--to-revision")
     parser.add_argument("--base-branch")
     parser.add_argument("--test-path", action="append", default=[])
     args = parser.parse_args(argv)
@@ -1251,6 +1485,12 @@ def main(argv=None):
         require(args.project is not None, "Example configuration is inert; supply --project or MANAGER_PROJECT")
         require(not any(k.startswith("OPENSHELL_") for k in os.environ),
                 "OpenShell environment overrides are not allowed")
+        if args.command == "migrate":
+            require(args.action == "revision" and args.from_revision is not None
+                    and args.to_revision is not None,
+                    "Use migrate revision --from-revision OLD_SHA --to-revision NEW_SHA")
+            migrate_revision(args.project, args.host, args.from_revision, args.to_revision)
+            return 0
         install_dependencies = args.command == "setup" and args.action == "apply" and args.agent not in {"claude", "opencode"}
         if args.command == "setup":
             require(args.action in {"apply", "check", "dry-run"}, "Invalid setup action")

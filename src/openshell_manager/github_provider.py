@@ -278,7 +278,7 @@ def verify(control, data):
     )
     tool(control, check=True)
     loaded = control.effective(data["policy"])
-    control.require(RULE in loaded["policy"]["network_policies"], "GitHub provider not attached")
+    control.require(RULE in loaded["policy"].get("network_policies", {}), "GitHub provider not attached")
     result = status(control, control.api("sandbox", "get", control.NAME), loaded["hash"])
     result.update(permissions(control))
     return result
@@ -348,7 +348,7 @@ def reconcile(control, data, mode="apply"):
     attachments = control.api("sandbox", "provider", "list", control.NAME)["providers"]
     attached = any(p["name"] == PROVIDER for p in attachments)
     compiled = control.api("policy", "get", control.NAME, "--full")
-    current_rule = compiled["policy"]["network_policies"].get(RULE)
+    current_rule = compiled["policy"].get("network_policies", {}).get(RULE)
     stale = current_rule is None or control.normalize(
         {"network_policies": {RULE: current_rule}}
     ) != control.normalize({"network_policies": {RULE: injected_rule(wanted)}})

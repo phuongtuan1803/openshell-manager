@@ -47,6 +47,67 @@ create a VM and reconcile policies; interactive start can log in and invoke mode
 Nothing in the folder reorganization changes effective policy, native permissions,
 state or tool pins. Never put host tokens or runtime state in this public repository.
 
+## External project Codex network onboarding
+
+The Manager **does not inherit** the illustrative Codex network rules in
+`config/defaults/phase2.json` for external projects. An external
+`project.json` with `"rules": []` is intentionally **default deny**: GitHub
+Provider readiness does not authorize Codex device login or workspace discovery.
+
+Before using `start login` or `start codex`, the Founder must review and
+explicitly declare the needed endpoints in the **private project profile**
+(never in the Manager's default config). For Codex 0.162.1, the currently
+observed onboarding endpoints are:
+
+| Purpose | Exact HTTPS endpoint | Pinned executable |
+| --- | --- | --- |
+| Device login | `auth.openai.com:443` | Discovered Codex native binary/daemon paths |
+| Account/workspace bootstrap | `chatgpt.com:443` | Discovered Codex native binary/daemon paths |
+
+Example reviewed profile entries; **do not silently inject these defaults**:
+
+```json
+"rules": [
+  {
+    "id": "codex_auth",
+    "host": "auth.openai.com",
+    "port": 443,
+    "access": "full",
+    "agent": "codex",
+    "review": "Founder-approved HTTPS for Codex device authentication"
+  },
+  {
+    "id": "codex_workspace",
+    "host": "chatgpt.com",
+    "port": 443,
+    "access": "full",
+    "agent": "codex",
+    "review": "Founder-approved HTTPS for Codex account/workspace discovery"
+  }
+]
+```
+
+Review the security impact: `full` means endpoint-level HTTPS access for the
+exact pinned executable paths, **not** HTTP path-specific permission. Check the
+actual denied endpoint and requested executable before changing a policy.
+The preflight reports missing `host:443`, binary path and commands without
+trying to log in or start a model.
+
+On an **already initialized project** after changing `project.json`:
+
+```bash
+openshell-manager rules reconcile  # Founder must type "reconcile" to approve the profile
+openshell-manager setup apply      # Installs only reviewed missing rules; verifies effective policy
+openshell-manager setup check
+openshell-manager start login      # Or: openshell-manager start codex
+```
+
+On a **new project**, approve the private profile before the initial
+`setup apply` instead. Existing rules explicitly approved and tracked through
+`rules pending`/`rules approve` are also accepted if the effective policy
+covers the pinned executables. Neither setup checks nor preflight invent
+missing network permissions. Preserve manual proposal approval and default deny.
+
 ## Offline verification
 
 ```bash

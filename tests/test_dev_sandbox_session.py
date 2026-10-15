@@ -224,6 +224,49 @@ def test_git_auth_configuration_is_memory_only_and_redacted(monkeypatch, tmp_pat
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.parametrize("token_key", ["GITHUB_TOKEN", "GH_TOKEN"])
+def test_git_keeps_supervisor_ca_while_stripping_inherited_overrides(
+    monkeypatch, tmp_path, token_key
+):
+    ca_bundle = "/run/openshell-supervisor-ca/material/ca-bundle.crt"
+    source = {
+        token_key: "DUMMY_PROVIDER_PLACEHOLDER_NEVER_LOG",
+        "GIT_SSL_CAINFO": ca_bundle,
+        "GIT_SSL_NO_VERIFY": "1",
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.sslVerify",
+        "GIT_CONFIG_VALUE_0": "false",
+        "GIT_CONFIG_GLOBAL": "/tmp/untrusted-gitconfig",
+        "GIT_TRACE_CURL": "1",
+        "GCM_TRACE": "1",
+    }
+    before = dict(source)
+
+    def run(argv, **kwargs):
+        env = kwargs["env"]
+        assert env["GIT_SSL_CAINFO"] == ca_bundle
+        for key in ("GIT_SSL_NO_VERIFY", "GIT_CONFIG_GLOBAL", "GIT_TRACE_CURL", "GCM_TRACE"):
+            assert key not in env
+        assert env["GIT_CONFIG_COUNT"] == "5"
+        assert env["GIT_CONFIG_KEY_0"] == "credential.helper"
+        assert env["GIT_CONFIG_VALUE_0"] == ""
+        assert all(
+            env[f"GIT_CONFIG_KEY_{i}"] != "http.sslVerify"
+            for i in range(int(env["GIT_CONFIG_COUNT"]))
+        )
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(session.subprocess, "run", run)
+    session.git(["ls-remote", session.REMOTE], root=tmp_path, env=session.environment(source))
+    assert source == before
+
+
+def test_git_does_not_invent_ca_configuration():
+    env = session.environment({"GH_TOKEN": "DUMMY_PROVIDER_PLACEHOLDER_NEVER_LOG"})
+    assert "GIT_SSL_CAINFO" not in env
+    assert "GIT_SSL_NO_VERIFY" not in env
+
+
 @pytest.mark.parametrize("operation", ["fill", "approve", "reject"])
 def test_real_git_stateless_helper_never_stores_credential(tmp_path, operation):
     secret = "DUMMY_PROVIDER_PLACEHOLDER_NEVER_LOG"
@@ -361,3 +404,44 @@ def test_source_lease_uses_runtime_project_lock(monkeypatch, tmp_path):
         with pytest.raises(ValueError, match='Concurrent active agent'):
             with session.lease():
                 pytest.fail('Runtime source lock must exclude sync')
+
+
+@pytest.mark.parametrize("argv, active", [
+    (b"/opt/codex/bin/codex\0login\0--device-auth\0", True),
+    (b"node\0/usr/local/lib/node_modules/@openai/codex/bin/codex.js\0login\0--device-auth\0", True),
+    (b"/sandbox/.codex/packages/app-server-daemon/releases/pinned/bin/codex\0app-server\0", True),
+    (b"/usr/bin/claude\0", True),
+    (b"/usr/bin/opencode\0", True),
+    (b"node\0/sandbox/project/server.js\0", False),
+    (b"/bin/sleep\0infinity\0", False),
+])
+def test_unmanaged_agent_detects_guest_launches(monkeypatch, tmp_path, argv, active):
+    process = tmp_path / "123"
+    process.mkdir()
+    (process / "cmdline").write_bytes(argv)
+    monkeypatch.setattr(session, "Path", lambda value: tmp_path if value == "/proc" else Path(value))
+    assert session.unmanaged_agent() is active
+
+
+@pytest.mark.parametrize("error, active", [
+    (FileNotFoundError(), False),
+    (ProcessLookupError(), False),
+    (PermissionError(), True),
+    (OSError("unreadable"), True),
+])
+def test_unmanaged_agent_requires_readable_process_metadata(monkeypatch, error, active):
+    class Process:
+        name = "123"
+
+        def __truediv__(self, _):
+            return self
+
+        def read_bytes(self):
+            raise error
+
+    class Proc:
+        def iterdir(self):
+            return [Process()]
+
+    monkeypatch.setattr(session, "Path", lambda _: Proc())
+    assert session.unmanaged_agent() is active
