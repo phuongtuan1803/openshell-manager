@@ -251,3 +251,47 @@ Complete offline regression verification after final code changes: **484 passed,
 16 skipped** in 111.15 seconds (`uv run --offline --locked python -m pytest -q`).
 The 16 skips remain the gated live agent evaluations. Syntax, final diff whitespace
 and credential-disclosure checks passed.
+
+## Operator hold — live B15 pending (2026-10-15)
+
+**Current decision: PENDING — do not claim B15 PASS or merge readiness.** The
+operator explicitly paused further live testing. This hold is not a code-test
+failure or a completed E2E acceptance; resume only on operator instruction.
+
+Observed on the host with Manager development revision
+`9104bc3a08d4791fe0e4235e5b0a1c39f7f0fcf2`:
+
+- Preflight passed: Manager provenance, Gateway `openshell`, mTLS, reviewed
+  image reuse and Telegram connection.
+- An isolated test sandbox reached Ready/native admission and native verification
+  checkpoints, but that run was interrupted by the operator (`SIGINT`). Its
+  owned sandbox cleanup was confirmed; it is **not** an E2E failure diagnosis.
+- A separate run stopped at `openshell sandbox create` (CLI exit code 1;
+  `command_exit_nonzero`), with no recorded permission mutation and confirmed
+  owned cleanup. The sanitized diagnostics did not identify the CLI's underlying
+  cause; no assertion is made that the Gateway or native policy caused it.
+- `/dev/kvm` remained the same inode and mode `root:kvm 0660` after the
+  interrupted run, while the temporary per-user ACL for `tuanpp` disappeared.
+  The interactive login already had group `kvm` (GID 108) and its read/write
+  test returned OK. In contrast, existing Gateway and VM processes' reported
+  supplementary groups **did not include GID 108**, consistent with stale
+  inherited group membership. This is a strong host-environment hypothesis,
+  **not a proven root cause of the CLI exit code 1**.
+- Other OMA and test sandboxes were present during troubleshooting; any Gateway
+  restart or sandbox deletion must be separately approved and must not implicitly
+  modify unrelated sandbox state. Earlier cleanup results apply only to the
+  specifically identified owned test sandbox.
+
+**Resume gate (operator-controlled):** confirm any planned sandbox cleanup and
+Gateway/VM-driver restart are safe, then verify the *running Gateway/driver
+processes* have group 108 and can access `/dev/kvm` without a manual ACL. Only
+then run one isolated `openshell-manager approval test` and record native
+Approve → LOADED/HTTP 200, separate Reject → policy-denied, and verified cleanup.
+If create still exits 1, stop and investigate the OpenShell CLI/driver error via
+redacted host-only diagnostics; do not repeatedly recreate VMs, print secrets,
+relax policies, silently grant ACLs, or treat a partial/interrupted run as PASS.
+
+**Outstanding before PR3b acceptance:** an operator-authorized clean B15 live
+PASS; final diff/security review; and CI verification for the final branch head
+(where available). Offline test pass counts documented above are historical
+results of earlier commits and do not establish the current branch head or B15.
