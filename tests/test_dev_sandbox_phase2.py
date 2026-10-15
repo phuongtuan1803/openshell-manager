@@ -613,3 +613,140 @@ def test_unexpected_provider_is_rejected_even_during_reconciliation(fake_effecti
     payload["policy"]["network_policies"]["_provider_unreviewed"] = {}
     with pytest.raises(ValueError, match="Unexpected provider"):
         control.effective(github_profile=False)
+
+
+def test_effective_accepts_native_deny_all_without_network_policies(fake_effective):
+    """OpenShell 0.1.2 omits empty network_policies in the returned JSON."""
+    _, payload, _ = fake_effective
+    payload["policy"].pop("network_policies")
+    expected = copy.deepcopy(payload["policy"])
+    assert control.effective(expected)["status"] == "effective"
+
+
+@pytest.fixture
+def interrupted_project_bootstrap(monkeypatch, tmp_path):
+    image_id = "sha256:" + "a" * 64
+    profile = {
+        "id": "oma",
+        "root": str(tmp_path / "oma"),
+        "repository": "phuongtuan1803/one-man-agency",
+        "sandbox": "oma-dev",
+        "workspace": "/sandbox/oma/checkout",
+        "manager_revision": "c" * 40,
+    }
+    monkeypatch.setattr(control, "PROFILE", profile)
+    monkeypatch.setattr(control, "NAME", profile["sandbox"])
+    monkeypatch.setattr(control, "STATE", tmp_path)
+    binding = {
+        key: str(profile[key])
+        for key in ("id", "root", "repository", "sandbox", "workspace", "manager_revision")
+    }
+    control.save(tmp_path / "project-binding.json", binding)
+    control.save(tmp_path / "bootstrap-policy.json", control.base_policy())
+    info = {
+        "id": "11d945ec-15a5-460b-b58c-7c32e8468a83",
+        "name": "oma-dev",
+        "phase": "Ready",
+        "configuration_admission": {"state": "accepted"},
+        "labels": {
+            "manager.phase": "2",
+            "manager.project": "oma",
+            "manager.image": image_id[7:39],
+        },
+    }
+    return image_id, info
+
+
+def test_interrupted_bootstrap_receipt_and_identity_verified(
+    interrupted_project_bootstrap, monkeypatch
+):
+    image_id, info = interrupted_project_bootstrap
+    checked = []
+    monkeypatch.setattr(control, "effective", lambda policy: checked.append(policy))
+    control.verify_interrupted_bootstrap(info, image_id)
+    assert checked == [control.base_policy()]
+
+
+@pytest.mark.parametrize(
+    "drift",
+    ["binding", "bootstrap_policy", "missing_receipt", "sandbox_id", "image", "project"],
+)
+def test_interrupted_bootstrap_refuses_unverified_resources(
+    interrupted_project_bootstrap, monkeypatch, drift
+):
+    image_id, info = interrupted_project_bootstrap
+    if drift == "binding":
+        binding = control.read(control.STATE / "project-binding.json")
+        binding["repository"] = "other/repo"
+        control.save(control.STATE / "project-binding.json", binding)
+    elif drift == "bootstrap_policy":
+        policy = control.base_policy()
+        policy["filesystem_policy"]["read_write"].append("/host")
+        control.save(control.STATE / "bootstrap-policy.json", policy)
+    elif drift == "missing_receipt":
+        (control.STATE / "bootstrap-policy.json").unlink()
+    elif drift == "sandbox_id":
+        info["id"] = "not-a-native-sandbox-id"
+    elif drift == "image":
+        info["labels"]["manager.image"] = "bad"
+    elif drift == "project":
+        info["labels"]["manager.project"] = "foreign"
+
+    monkeypatch.setattr(
+        control, "effective", lambda *_: pytest.fail("Unverified policy must not be used")
+    )
+    with pytest.raises(ValueError, match="refusing|unavailable"):
+        control.verify_interrupted_bootstrap(info, image_id)
+    assert not (control.STATE / "state.json").exists()
+
+
+def test_interrupted_bootstrap_rejects_policy_drift_without_writing_state(
+    interrupted_project_bootstrap, monkeypatch
+):
+    image_id, info = interrupted_project_bootstrap
+    def deny_policy(_):
+        raise ValueError("Effective policy drift")
+    monkeypatch.setattr(control, "effective", deny_policy)
+    with pytest.raises(ValueError, match="policy drift"):
+        control.verify_interrupted_bootstrap(info, image_id)
+    assert not (control.STATE / "state.json").exists()
+
+
+def test_setup_resumes_verified_bootstrap_without_creating_sandbox(
+    interrupted_project_bootstrap, monkeypatch
+):
+    image_id, info = interrupted_project_bootstrap
+    monkeypatch.setattr(control, "preflight", lambda: None)
+    monkeypatch.setattr(control, "image", lambda **_: image_id)
+    monkeypatch.setattr(control, "config_hash", lambda: "reviewed-config")
+    monkeypatch.setattr(control, "policy_for", lambda tools: {"network_policies": {}})
+    monkeypatch.setattr(control, "verify_tools", lambda data=None: {
+        "binaries": ["/usr/local/bin/codex"],
+        "launcher": "/usr/local/bin/codex",
+    })
+    monkeypatch.setattr(control.github_provider, "reconcile", lambda *a, **k: None)
+    monkeypatch.setattr(control, "guest", lambda *a, **k: {})
+    monkeypatch.setattr(control, "login_status", lambda _: True)
+    monkeypatch.setattr(control, "sync_checkout", lambda **_: {"state": "current"})
+    monkeypatch.setattr(control, "api", lambda *a: info)
+    checked = []
+    monkeypatch.setattr(control, "effective", lambda policy: checked.append(policy))
+    native_calls = []
+
+    def native(*args, **kwargs):
+        native_calls.append(args)
+        if args[:2] == ("sandbox", "list"):
+            return subprocess.CompletedProcess(args, 0, "NAME CREATED PHASE\noma-dev today Ready\n", "")
+        pytest.fail("Resume must not mutate native sandbox state")
+    monkeypatch.setattr(control, "oshell", native)
+
+    def execute(*args, **kwargs):
+        source = " ".join(map(str, args))
+        stdout = "0\n" if "unmanaged_agent()" in source else "--sandbox --ask-for-approval\n"
+        return subprocess.CompletedProcess(args, 0, stdout, "")
+    monkeypatch.setattr(control, "execute", execute)
+
+    control.setup("apply")
+    assert control.read(control.STATE / "state.json")["sandbox_id"] == info["id"]
+    assert checked == [control.base_policy(), control.base_policy()]
+    assert all(args[:2] != ("sandbox", "create") for args in native_calls)
