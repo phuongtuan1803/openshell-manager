@@ -112,6 +112,59 @@ a conflicting effective AUTO/global policy is refused. The bootstrap policy reus
 Manager's deny-all network and existing filesystem/Landlock boundary. No GitHub
 provider, remote clone, agent login, model launch or generic policy update runs.
 
+## KVM permission troubleshooting
+
+If preflight reports `host_kvm_access`, or sandbox creation fails and the
+Gateway journal reports `cannot open /dev/kvm: Permission denied`, check from a
+normal host terminal:
+
+```bash
+id
+getent group kvm
+getfacl /dev/kvm
+test -r /dev/kvm && test -w /dev/kvm && echo 'KVM access OK'
+```
+
+For persistent group membership, add your account if necessary:
+
+```bash
+sudo usermod -aG kvm "$(id -un)"
+```
+
+Log out and back in to refresh session groups. Existing Gateway/VM driver
+processes also need refreshed groups; plan any service restart around existing
+sandboxes. A new shell alone does not refresh an already running Gateway.
+If `getent group kvm` already lists your account but `id` does not, membership
+is stale. This runs the test with the existing group membership:
+
+```bash
+sg kvm -c 'openshell-manager approval test'
+```
+
+That refreshes only the test process. To give the already running Gateway
+access without restarting it, an operator can grant a temporary device ACL:
+
+```bash
+sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+getfacl /dev/kvm
+```
+
+This user ACL allowed sandbox creation during live verification. Device
+recreation, reboot or login-session ACL management may remove it; verify it
+again if access disappears. Where your primary group is private to your
+account, a group ACL is another option:
+
+```bash
+sudo setfacl -m "g:$(id -g):rw" /dev/kvm
+getfacl /dev/kvm
+```
+
+On the verified host, that group is `tuanpp` (GID 1000), so the explicit command
+is `sudo setfacl -m g:1000:rw /dev/kvm`; confirm `group:tuanpp:rw-` appears.
+This grants access to every member of that group. Device ACLs are temporary;
+keep the persistent `kvm` membership and refresh the relevant processes.
+The approval test never changes these host permissions itself.
+
 ## Isolation, timing and results
 
 Every invocation uses a new `tg-<10 hex characters>-dev` name (17 characters), a
